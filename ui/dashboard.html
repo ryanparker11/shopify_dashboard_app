@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+  <head><meta charset="utf-8"><title>Shopify MVP</title></head>
+  <body>
+    <h1>Store Dashboard (MVP)</h1>
+    <p>Total Revenue (sample window): ${{ '%.2f' % revenue }}</p>
+    <p>Avg Order Value: ${{ '%.2f' % avg_order }}</p>
+
+    <h2>Recent Orders</h2>
+    <table border="1" cellpadding="6">
+      <tr><th>#</th><th>Customer</th><th>Total</th><th>Created</th><th>Financial</th></tr>
+      {% for o in orders %}
+        <tr>
+          <td>{{ o.name }}</td>
+          <td>{{ (o.customer.first_name or '') + ' ' + (o.customer.last_name or '') if o.customer else '—' }}</td>
+          <td>${{ o.total_price }}</td>
+          <td>{{ o.created_at }}</td>
+          <td>{{ o.financial_status }}</td>
+        </tr>
+      {% endfor %}
+    </table>
+
+    <h2>Recent Customers</h2>
+    <ul>
+      {% for c in customers %}
+        <li>{{ c.first_name }} {{ c.last_name }} — {{ c.email or 'no email' }}</li>
+      {% endfor %}
+    </ul>
+  </body>
+</html>

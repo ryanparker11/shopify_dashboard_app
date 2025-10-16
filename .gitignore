@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.env.*
+
+# Node / UI
+commerce_app/ui/node_modules/
+commerce_app/ui/dist/
+commerce_app/ui/build/
+*.log
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# DB/keys
+*.db
+*.sqlite
+*.pem
+*.key
+*.crt
