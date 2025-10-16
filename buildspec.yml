@@ -13,17 +13,15 @@ phases:
       - ACCOUNT_ID=$(aws sts get-caller-identity --query 'Account' --output text)
       - ECR_URI=${ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com
       - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $ECR_URI
+
   build:
     commands:
       - echo "Building the Docker image..."
       - docker build -t $ECR_REPO_NAME:$IMAGE_TAG .
       - docker tag $ECR_REPO_NAME:$IMAGE_TAG $ECR_URI/$ECR_REPO_NAME:$IMAGE_TAG
+
   post_build:
     commands:
       - echo "Pushing the image to ECR..."
       - docker push $ECR_URI/$ECR_REPO_NAME:$IMAGE_TAG
       - echo "Image pushed: $ECR_URI/$ECR_REPO_NAME:$IMAGE_TAG"
-artifacts:
-  files:
-    - '**/*'
-  base-directory: .
