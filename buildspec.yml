@@ -2,7 +2,7 @@ version: 0.2
 
 env:
   variables:
-    AWS_DEFAULT_REGION: us-east-1
+    AWS_DEFAULT_REGION: us-east-2
     ECR_REPO_NAME: shopify-dashboard-app
     IMAGE_TAG: latest
 
