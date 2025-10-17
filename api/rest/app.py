@@ -14,6 +14,10 @@ from commerce_app.integrations.shopify.shopify_client import get_orders, get_cus
 app = FastAPI()
 templates = Jinja2Templates(directory="commerce_app/ui")
 
+@app.get("/healthz")
+def healthz():
+    return {"status": "ok"}
+
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
     orders = await get_orders(limit=20)
