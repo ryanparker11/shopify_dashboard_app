@@ -12,7 +12,7 @@ from fastapi.templating import Jinja2Templates
 from commerce_app.integrations.shopify.shopify_client import get_orders, get_customers
 
 app = FastAPI()
-templates = Jinja2Templates(directory="commerce_app/ui")
+templates = Jinja2Templates(directory="shopify-dashboard-app/ui")
 
 @app.get("/healthz")
 def healthz():
