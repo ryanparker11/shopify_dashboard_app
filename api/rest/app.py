@@ -9,7 +9,7 @@ import os, uvicorn, math
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
-from commerce_app.integrations.shopify.shopify_client import get_orders, get_customers
+from integrations.shopify.shopify_client import get_orders, get_customers
 
 app = FastAPI()
 templates = Jinja2Templates(directory="shopify-dashboard-app/ui")
