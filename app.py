@@ -9,7 +9,7 @@ import os, uvicorn, math
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
-from shopify_dashboard_app.integrations.shopify.shopify_client import get_orders, get_customers
+from integrations.shopify.shopify_client import get_orders, get_customers
 
 app = FastAPI()
 templates = Jinja2Templates(directory="shopify-dashboard-app/ui")
@@ -30,5 +30,5 @@ async def dashboard(request: Request):
          "revenue": revenue, "avg_order": avg_order}
     )
 
-#if __name__ == "__main__":
-#    uvicorn.run("app:dashboard", host="0.0.0.0", port=8000, factory=False)
+if __name__ == "__main__":
+    uvicorn.run("app:dashboard", host="0.0.0.0", port=8000, factory=False)
