@@ -2,7 +2,7 @@ import sys
 from pathlib import Path
 
 # Add the project root to PYTHONPATH at runtime
-sys.path.append(str(Path(__file__).resolve().parents[3]))  # adjust depth if needed
+#sys.path.append(str(Path(__file__).resolve().parents[3]))  # adjust depth if needed
 
 
 import os, uvicorn, math
@@ -30,5 +30,5 @@ async def dashboard(request: Request):
          "revenue": revenue, "avg_order": avg_order}
     )
 
-if __name__ == "__main__":
-    uvicorn.run("app:dashboard", host="0.0.0.0", port=8000, factory=False)
+#if __name__ == "__main__":
+#    uvicorn.run("app:dashboard", host="0.0.0.0", port=8000, factory=False)
