@@ -13,7 +13,7 @@ from commerce_app.integrations.shopify.shopify_client import get_orders, get_cus
 from commerce_app.api.analytics import router as analytics_router
 
 app = FastAPI()
-templates = Jinja2Templates(directory="ui")
+templates = Jinja2Templates(directory="commerce_app/ui")
 
 # mount the analytics routes
 app.include_router(analytics_router)
