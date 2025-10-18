@@ -34,5 +34,17 @@ async def dashboard(request: Request):
          "revenue": revenue, "avg_order": avg_order}
     )
 
+# at bottom of commerce_app/app.py
+import logging
+for r in app.routes:
+    logging.warning("ROUTE %s %s", getattr(r, "path", ""), getattr(r, "methods", ""))
+
+# optional: a build stamp to prove you pulled the new image
+import os
+BUILD_ID = os.environ.get("BUILD_ID", "dev")
+@app.get("/whoami")
+def whoami():
+    return {"module": "commerce_app.app", "build_id": BUILD_ID}
+
 #if __name__ == "__main__":
 #    uvicorn.run("app:dashboard", host="0.0.0.0", port=8000, factory=False)
