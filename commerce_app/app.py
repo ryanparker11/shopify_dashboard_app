@@ -9,11 +9,11 @@ import os, uvicorn, math
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
-from integrations.shopify.shopify_client import get_orders, get_customers
-from api.analytics import router as analytics_router
+from commerce_app.integrations.shopify.shopify_client import get_orders, get_customers
+from commerce_app.api.analytics import router as analytics_router
 
 app = FastAPI()
-templates = Jinja2Templates(directory="ui")
+templates = Jinja2Templates(directory="commerce_app/ui")
 
 # mount the analytics routes
 app.include_router(analytics_router)
