@@ -10,9 +10,13 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from integrations.shopify.shopify_client import get_orders, get_customers
+from api.analytics import router as analytics_router
 
 app = FastAPI()
 templates = Jinja2Templates(directory="ui")
+
+# mount the analytics routes
+app.include_router(analytics_router)
 
 @app.get("/healthz")
 def healthz():
