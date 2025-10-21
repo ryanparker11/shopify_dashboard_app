@@ -9,5 +9,6 @@ ENV PORT=8080
 EXPOSE 8080
 ARG BUILD_ID
 ENV BUILD_ID=$BUILD_ID
+#test
 
 CMD ["python","-m","uvicorn","commerce_app.app:app","--host","0.0.0.0","--port","8080", "--proxy-headers", "--log-level", "info"]
