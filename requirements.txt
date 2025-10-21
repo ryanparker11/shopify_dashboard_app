@@ -3,3 +3,8 @@ uvicorn[standard]
 httpx
 python-dotenv
 jinja2
+asyncio
+typing
+psycopg[binary]~=3.2
+psycopg_pool~=3.2
+pydantic~=2.8
