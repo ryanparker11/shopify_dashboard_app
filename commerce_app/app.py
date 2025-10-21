@@ -1,5 +1,7 @@
 import sys
 from pathlib import Path
+from dotenv import load_dotenv
+load_dotenv()
 
 # Add the project root to PYTHONPATH at runtime
 #sys.path.append(str(Path(__file__).resolve().parents[3]))  # adjust depth if needed
@@ -12,7 +14,7 @@ from fastapi.templating import Jinja2Templates
 from commerce_app.integrations.shopify.shopify_client import get_orders, get_customers
 from commerce_app.core.routers.analytics import router as analytics_router
 from commerce_app.core.db import init_pool, close_pool
-from commerce_app.core.routers import webhooks, health
+from commerce_app.core.routers import webhooks, health, analytics
 from commerce_app.auth.shopify_oauth import router as shopify_auth
 
 
@@ -26,6 +28,7 @@ app.include_router(analytics_router, prefix="/api", tags=["analytics"])
 app.include_router(webhooks.router, prefix="/webhooks", tags=["shopify"])
 app.include_router(health.router)
 app.include_router(shopify_auth)
+app.include_router(analytics.router)
 
 
 @app.get("/healthz")
