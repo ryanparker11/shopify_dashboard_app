@@ -1,24 +1,44 @@
-import React from 'react'
-import { isEmbeddedShopify, initAppBridge } from '@/lib/shopify'
+// shopifyEmbedGate.tsx
+import React from 'react';
 
-// Add this type declaration
+interface ShopifyConfig {
+  apiKey: string;
+  host: string;
+  forceRedirect: boolean;
+}
+
 declare global {
   interface Window {
-    __SHOPIFY_APP__?: ReturnType<typeof initAppBridge>
+    __SHOPIFY_APP__?: ShopifyConfig;
   }
 }
 
+function isEmbeddedShopify(): boolean {
+  const urlParams = new URLSearchParams(window.location.search);
+  return urlParams.has('shop') && urlParams.has('host');
+}
+
 export default function ShopifyEmbedGate({ children }: { children: React.ReactNode }) {
-  const [ready, setReady] = React.useState(false)
+  const [ready, setReady] = React.useState(false);
   
   React.useEffect(() => {
     if (isEmbeddedShopify()) {
-      const app = initAppBridge()
-      window.__SHOPIFY_APP__ = app
+      const urlParams = new URLSearchParams(window.location.search);
+      const host = urlParams.get('host');
+      
+      const appBridgeConfig: ShopifyConfig = {
+        apiKey: import.meta.env.VITE_SHOPIFY_API_KEY || '',
+        host: host || '',
+        forceRedirect: true,
+      };
+      
+      // Store config globally for components that need it
+      window.__SHOPIFY_APP__ = appBridgeConfig;
     }
-    setReady(true)
-  }, [])
+    setReady(true);
+  }, []);
   
-  if (!ready) return null
-  return <>{children}</>
+  if (!ready) return null;
+  
+  return <>{children}</>;
 }
