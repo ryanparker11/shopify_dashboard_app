@@ -7,7 +7,7 @@ from datetime import datetime
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
-load_dotenv()
+
 
 router = APIRouter(prefix="/auth", tags=["shopify-auth"])
 
