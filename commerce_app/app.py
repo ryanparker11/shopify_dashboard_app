@@ -35,17 +35,17 @@ app.include_router(analytics.router)
 def healthz():
     return {"status": "ok"}
 
-@app.get("/", response_class=HTMLResponse)
-async def dashboard(request: Request):
-    orders = await get_orders(limit=20)
-    customers = await get_customers(limit=20)
-    revenue = sum(float(o.get("total_price", 0) or 0) for o in orders)
-    avg_order = (revenue / len(orders)) if orders else 0
-    return templates.TemplateResponse(
-        "dashboard.html",
-        {"request": request, "orders": orders, "customers": customers,
-         "revenue": revenue, "avg_order": avg_order}
-    )
+#@app.get("/", response_class=HTMLResponse)
+#async def dashboard(request: Request):
+#    orders = await get_orders(limit=20)
+#    customers = await get_customers(limit=20)
+#    revenue = sum(float(o.get("total_price", 0) or 0) for o in orders)
+#    avg_order = (revenue / len(orders)) if orders else 0
+#    return templates.TemplateResponse(
+#        "dashboard.html",
+#        {"request": request, "orders": orders, "customers": customers,
+#         "revenue": revenue, "avg_order": avg_order}
+#    )
 
 # at bottom of commerce_app/app.py
 import logging
