@@ -63,7 +63,6 @@ async def process_webhook(shop_domain: str, topic: str, payload: dict):
             await conn.commit()
 
 
-
 async def process_order_webhook(cur, shop_id: int, payload: dict):
     """Process orders/create and orders/updated webhooks."""
     order_id = payload.get("id")
@@ -124,6 +123,7 @@ async def process_order_webhook(cur, shop_id: int, payload: dict):
         )
     )
 
+
 async def process_product_webhook(cur, shop_id: int, payload: dict):
     """Process products/create and products/update webhooks."""
     product_id = payload.get("id")
@@ -170,6 +170,7 @@ async def process_product_webhook(cur, shop_id: int, payload: dict):
             json.dumps(payload)
         )
     )
+
 
 async def process_customer_webhook(cur, shop_id: int, payload: dict):
     """Process customers/create and customers/update webhooks."""
@@ -242,10 +243,11 @@ async def webhook_ingest(
     # Get raw body for HMAC verification
     body = await request.body()
 
-     # Verify webhook authenticity
-    webhook_secret = os.getenv("SHOPIFY_WEBHOOK_SECRET")
+    # Verify webhook authenticity
+    # Use SHOPIFY_API_SECRET (same secret for OAuth and webhooks)
+    webhook_secret = os.getenv("SHOPIFY_API_SECRET")
     if not webhook_secret:
-        raise HTTPException(500, "SHOPIFY_WEBHOOK_SECRET not configured")
+        raise HTTPException(500, "SHOPIFY_API_SECRET not configured")
     
     if not verify_webhook(body, x_shopify_hmac_sha256, webhook_secret):
         raise HTTPException(401, "Invalid webhook signature")
@@ -269,7 +271,7 @@ async def webhook_ingest(
             if not shop_row:
                 # Log the webhook but don't fail - shop might be registering
                 print(f"Warning: Received webhook for unregistered shop: {x_shopify_shop_domain}")
-                # You might want to store it anyway for debugging
+                # Store it anyway for debugging
                 await cur.execute(
                     """
                     INSERT INTO shopify.webhooks_received (shop_id, topic, payload_json, processed)
@@ -290,7 +292,7 @@ async def webhook_ingest(
             )
             await conn.commit()
     
-        # Process webhook in background (after returning response to Shopify)
+    # Process webhook in background (after returning response to Shopify)
     background_tasks.add_task(
         process_webhook,
         x_shopify_shop_domain,
@@ -299,8 +301,7 @@ async def webhook_ingest(
     )
     
     return {"status": "ok"}
-    
-# Add this to your webhooks.py router
+
 
 @router.post("/test-ingest")
 async def test_webhook_ingest(
@@ -310,7 +311,7 @@ async def test_webhook_ingest(
 ):
     """
     Test endpoint without HMAC verification.
-    Remove this in production!
+    REMOVE THIS IN PRODUCTION!
     """
     payload = await request.json()
     
@@ -336,7 +337,7 @@ async def test_webhook_ingest(
     
     return {"status": "ok", "message": "Test webhook received"}
 
-   
+
 @router.get("/status")
 async def webhook_status(shop_domain: Optional[str] = None, limit: int = 100):
     """
@@ -390,20 +391,3 @@ async def webhook_status(shop_domain: Optional[str] = None, limit: int = 100):
                 }
                 for row in rows
             ]
-    
-    
-    async with get_conn() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(
-                """
-                INSERT INTO shopify.webhooks_received (shop_id, topic, payload_json)
-                VALUES (
-                  (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s),
-                  %s,
-                  %s::jsonb
-                );
-                """,
-                (x_shopify_shop_domain, x_shopify_topic, json.dumps(payload)),
-            )
-    # (Optional) return 202 and process on a background worker
-    return {"status": "ok"}
