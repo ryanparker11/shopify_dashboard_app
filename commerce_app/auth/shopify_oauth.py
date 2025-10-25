@@ -7,7 +7,11 @@ from datetime import datetime
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
+import logging
 
+
+logger = logging.getLogger(__name__)
+load_dotenv()
 
 router = APIRouter(prefix="/auth", tags=["shopify-auth"])
 
@@ -47,6 +51,47 @@ def set_cookie(response: Response, name: str, value: str, max_age: int = 300):
 
 def get_cookie(request: Request, name: str) -> Optional[str]:
     return request.cookies.get(name)
+
+
+async def register_webhooks(shop: str, access_token: str):
+    """
+    Register webhooks with Shopify after app installation.
+    This ensures Shopify sends webhook events to your endpoint.
+    """
+    # Define which webhooks you want to receive
+    webhooks_to_create = [
+        {"topic": "orders/create", "address": f"{APP_URL}/webhooks/ingest"},
+        {"topic": "orders/updated", "address": f"{APP_URL}/webhooks/ingest"},
+        {"topic": "products/create", "address": f"{APP_URL}/webhooks/ingest"},
+        {"topic": "products/update", "address": f"{APP_URL}/webhooks/ingest"},
+        {"topic": "customers/create", "address": f"{APP_URL}/webhooks/ingest"},
+        {"topic": "customers/update", "address": f"{APP_URL}/webhooks/ingest"},
+    ]
+    
+    # Use Shopify Admin API to register each webhook
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        for webhook_config in webhooks_to_create:
+            try:
+                response = await client.post(
+                    f"https://{shop}/admin/api/2024-10/webhooks.json",
+                    headers={
+                        "X-Shopify-Access-Token": access_token,
+                        "Content-Type": "application/json"
+                    },
+                    json={"webhook": webhook_config}
+                )
+                
+                if response.status_code == 201:
+                    logger.info(f"✅ Registered webhook: {webhook_config['topic']} for {shop}")
+                elif response.status_code == 422:
+                    # Webhook might already exist
+                    logger.warning(f"⚠️  Webhook already exists: {webhook_config['topic']} for {shop}")
+                else:
+                    logger.error(f"❌ Failed to register webhook {webhook_config['topic']}: {response.text}")
+                    
+            except Exception as e:
+                logger.error(f"❌ Error registering webhook {webhook_config['topic']}: {e}")
+
 
 @router.get("/start")
 async def auth_start(request: Request, shop: str, host: Optional[str] = None):
@@ -112,9 +157,9 @@ async def auth_callback(request: Request):
     if not hmac_ok:
         raise HTTPException(status_code=400, detail="HMAC verification failed")
 
-    shop = qp.get("shop")
-    code = qp.get("code")
-    state = qp.get("state")
+    shop = qp.get("shop") #this is the shop domain
+    code = qp.get("code") #this is the authorization code
+    state = qp.get("state") #this is the CSRF state
     if not (shop and code and state):
         raise HTTPException(status_code=400, detail="Missing shop/code/state")
 
@@ -137,20 +182,49 @@ async def auth_callback(request: Request):
         access_token = data["access_token"]
         scope = data.get("scope", "")
 
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        r = await client.post(token_url, json=payload)
+        if r.status_code != 200:
+            raise HTTPException(status_code=400, detail=f"Token exchange failed: {r.text}")
+        data = r.json()
+        access_token = data["access_token"]
+        scope = data.get("scope", "")
+        
+        # 🆕 INSERT HERE - Fetch shop details
+        shop_info_response = await client.get(
+            f"https://{shop}/admin/api/2024-10/shop.json",
+            headers={"X-Shopify-Access-Token": access_token}
+        )
+        
+        if shop_info_response.status_code == 200:
+            shop_data = shop_info_response.json()["shop"]
+            shop_name = shop_data.get("name", "")
+        else:
+            shop_name = ""  # Fallback if fetch fails
+
     # Upsert shop record
     conn = db()
     with conn, conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO shops (shop_domain, access_token, scope, installed_at, updated_at)
-            VALUES (%s, %s, %s, now(), now())
+            INSERT INTO shopify.shops (shop_domain, shop_name, access_token, access_scope, installed_at, updated_at)
+            VALUES (%s, %s, %s, %s, now(), now())
             ON CONFLICT (shop_domain)
-            DO UPDATE SET access_token = EXCLUDED.access_token,
-                          scope = EXCLUDED.scope,
+            DO UPDATE SET shop_name = EXCLUDED.shop_name,
+                          access_token = EXCLUDED.access_token,
+                          access_scope = EXCLUDED.access_scope,
                           updated_at = now();
             """,
             (shop, access_token, scope),
         )
+
+# 🆕 REGISTER WEBHOOKS - This is the new addition!
+    try:
+        await register_webhooks(shop, access_token)
+    except Exception as e:
+        logger.error(f"Failed to register webhooks for {shop}: {e}")
+        # Don't fail the auth flow if webhook registration fails
+        # The merchant is still installed, webhooks can be registered later
 
     # Redirect into your embedded app with host param if present.
     # If Shopify sent 'host' in the original flow, you probably stored it; fall back to Admin domain.

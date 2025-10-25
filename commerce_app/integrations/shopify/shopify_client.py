@@ -1,5 +1,6 @@
-import os, httpx
+import os, httpx, asyncio
 from dotenv import load_dotenv
+from typing import AsyncIterator, Dict, List, Optional, Tuple
 load_dotenv()
 
 BASE = f"{os.environ['SHOP_URL']}/admin/api/{os.environ.get('API_VERSION','2024-10')}"
