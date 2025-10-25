@@ -300,7 +300,43 @@ async def webhook_ingest(
     
     return {"status": "ok"}
     
+# Add this to your webhooks.py router
+
+@router.post("/test-ingest")
+async def test_webhook_ingest(
+    request: Request,
+    x_shopify_topic: str = Header(...),
+    x_shopify_shop_domain: str = Header(...)
+):
+    """
+    Test endpoint without HMAC verification.
+    Remove this in production!
+    """
+    payload = await request.json()
     
+    async with get_conn() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "SELECT shop_id FROM shopify.shops WHERE shop_domain = %s",
+                (x_shopify_shop_domain,)
+            )
+            shop_row = await cur.fetchone()
+            
+            if not shop_row:
+                return {"status": "accepted", "message": "Shop not registered"}
+            
+            await cur.execute(
+                """
+                INSERT INTO shopify.webhooks_received (shop_id, topic, payload_json, processed)
+                VALUES (%s, %s, %s::jsonb, false);
+                """,
+                (shop_row[0], x_shopify_topic, json.dumps(payload))
+            )
+            await conn.commit()
+    
+    return {"status": "ok", "message": "Test webhook received"}
+
+   
 @router.get("/status")
 async def webhook_status(shop_domain: Optional[str] = None, limit: int = 100):
     """

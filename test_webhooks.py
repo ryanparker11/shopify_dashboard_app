@@ -12,7 +12,7 @@ import os
 from datetime import datetime
 
 # Configuration
-BASE_URL = "http://api.lodestaranalytics.io"  # Change to your FastAPI server URL
+BASE_URL = "https://api.lodestaranalytics.io"  # Change to your FastAPI server URL
 WEBHOOK_SECRET = os.getenv("SHOPIFY_WEBHOOK_SECRET", "your-test-secret")
 SHOP_DOMAIN = "test-shop.myshopify.com"
 
