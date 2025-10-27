@@ -184,7 +184,7 @@ export default function App() {
         <div style={{ padding: '20px' }}>
           {renderSyncBanner()}
           
-          <div style={{ marginTop: '20px' }}>
+          <div style={{ marginTop: '100px' }}>
             <Card>
               <BlockStack gap="400">
                 <Text as="h1" variant="headingLg">
