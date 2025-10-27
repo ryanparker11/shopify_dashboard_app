@@ -1,5 +1,5 @@
 // App.tsx
-import { AppProvider, Card, Banner, ProgressBar, Text, BlockStack, Layout } from '@shopify/polaris';
+import { AppProvider, Card, Banner, ProgressBar, Text, BlockStack } from '@shopify/polaris';
 import enTranslations from '@shopify/polaris/locales/en.json';
 import '@shopify/polaris/build/esm/styles.css';
 import ShopifyEmbedGate from './components/ShopifyEmbedGate';
@@ -134,32 +134,36 @@ export default function App() {
   };
 
   const renderCharts = () => {
-    console.log('renderCharts called, syncStatus:', syncStatus, 'chartData length:', chartData.length);
-    if (syncStatus?.status !== 'completed' || chartData.length === 0) {
-      return null;
-    }
+  console.log('renderCharts called, syncStatus:', syncStatus, 'chartData length:', chartData.length);
+  
+  if (syncStatus?.status !== 'completed' || chartData.length === 0) {
+    return null;
+  }
 
-    return (
-      <Layout>
+  return (
+    <div style={{ marginTop: '20px' }}>
+      <BlockStack gap="400">
         {chartData.map((chart, index) => (
-          <Layout.Section key={index}>
-            <Card>
+          <Card key={index}>
+            <div style={{ padding: '16px' }}>
               <Plot
                 data={chart.data}
                 layout={{
                   ...chart.layout,
                   autosize: true,
+                  margin: { t: 60, r: 40, b: 60, l: 60 }
                 }}
-                config={{ responsive: true }}
+                config={{ responsive: true, displayModeBar: false }}
                 style={{ width: '100%', height: '400px' }}
                 useResizeHandler={true}
               />
-            </Card>
-          </Layout.Section>
+            </div>
+          </Card>
         ))}
-      </Layout>
-    );
-  };
+      </BlockStack>
+    </div>
+  );
+};
 
   return (
     <ShopifyEmbedGate>
