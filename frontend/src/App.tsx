@@ -1,9 +1,10 @@
 // App.tsx
-import { AppProvider, Card, Banner, ProgressBar, Text, BlockStack } from '@shopify/polaris';
+import { AppProvider, Card, Banner, ProgressBar, Text, BlockStack, Layout } from '@shopify/polaris';
 import enTranslations from '@shopify/polaris/locales/en.json';
 import '@shopify/polaris/build/esm/styles.css';
 import ShopifyEmbedGate from './components/ShopifyEmbedGate';
 import { useEffect, useState } from 'react';
+import Plot from 'react-plotly.js';
 
 interface SyncStatus {
   status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'not_found';
@@ -12,27 +13,41 @@ interface SyncStatus {
   error: string | null;
 }
 
+interface ChartData {
+  data: Plotly.Data[];
+  layout: Partial<Plotly.Layout>;
+}
+
 export default function App() {
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [chartData, setChartData] = useState<ChartData[]>([]);
+  const API_URL = import.meta.env.VITE_API_URL || 'https://api.lodestaranalytics.io';
+  //const [shop, setShop] = useState<string | null>(null);
 
   useEffect(() => {
     // Get shop from URL params (Shopify passes ?shop=...)
     const params = new URLSearchParams(window.location.search);
-    const shop = params.get('shop');
+    const shopParam = params.get('shop');
+    //setShop(shopParam);
 
-    if (!shop) {
+    if (!shopParam) {
       setIsLoading(false);
       return;
     }
 
     const checkSyncStatus = async () => {
       try {
-        const response = await fetch(`/auth/sync-status/${shop}`);
+        const response = await fetch(`${API_URL}/auth/sync-status/${shopParam}`);
         const data: SyncStatus = await response.json();
         
         setSyncStatus(data);
         setIsLoading(false);
+
+        // If completed, fetch chart data
+        if (data.status === 'completed') {
+          fetchChartData(shopParam);
+        }
 
         // If still syncing, check again in 3 seconds
         if (data.status === 'pending' || data.status === 'in_progress') {
@@ -46,6 +61,17 @@ export default function App() {
 
     checkSyncStatus();
   }, []);
+
+  const fetchChartData = async (shopName: string) => {
+    try {
+      // Fetch your chart data from your backend API
+      const response = await fetch(`${API_URL}/charts/${shopName}`);
+      const data = await response.json();
+      setChartData(data.charts || []);
+    } catch (error) {
+      console.error('Failed to fetch chart data:', error);
+    }
+  };
 
   const renderSyncBanner = () => {
     if (isLoading || !syncStatus) return null;
@@ -105,6 +131,33 @@ export default function App() {
     }
   };
 
+  const renderCharts = () => {
+    if (syncStatus?.status !== 'completed' || chartData.length === 0) {
+      return null;
+    }
+
+    return (
+      <Layout>
+        {chartData.map((chart, index) => (
+          <Layout.Section key={index}>
+            <Card>
+              <Plot
+                data={chart.data}
+                layout={{
+                  ...chart.layout,
+                  autosize: true,
+                }}
+                config={{ responsive: true }}
+                style={{ width: '100%', height: '400px' }}
+                useResizeHandler={true}
+              />
+            </Card>
+          </Layout.Section>
+        ))}
+      </Layout>
+    );
+  };
+
   return (
     <ShopifyEmbedGate>
       <AppProvider i18n={enTranslations}>
@@ -123,10 +176,11 @@ export default function App() {
                     Your store has {syncStatus.orders_synced.toLocaleString()} orders ready to analyze.
                   </Text>
                 )}
-
-                {/* Add your routes/components here */}
               </BlockStack>
             </Card>
+
+            {/* Display charts when sync is completed */}
+            {renderCharts()}
           </div>
         </div>
       </AppProvider>
