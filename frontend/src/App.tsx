@@ -1,5 +1,5 @@
 // App.tsx
-import { AppProvider, Card, Banner, ProgressBar, Text, BlockStack } from '@shopify/polaris';
+import { AppProvider, Card, Banner, ProgressBar, Text, BlockStack, Layout } from '@shopify/polaris';
 import enTranslations from '@shopify/polaris/locales/en.json';
 import '@shopify/polaris/build/esm/styles.css';
 import ShopifyEmbedGate from './components/ShopifyEmbedGate';
@@ -23,13 +23,11 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [chartData, setChartData] = useState<ChartData[]>([]);
   const API_URL = import.meta.env.VITE_API_URL || 'https://api.lodestaranalytics.io';
-  //const [shop, setShop] = useState<string | null>(null);
 
   useEffect(() => {
     // Get shop from URL params (Shopify passes ?shop=...)
     const params = new URLSearchParams(window.location.search);
     const shopParam = params.get('shop');
-    //setShop(shopParam);
 
     if (!shopParam) {
       setIsLoading(false);
@@ -67,9 +65,9 @@ export default function App() {
       // Fetch your chart data from your backend API
       const response = await fetch(`${API_URL}/api/charts/${shopName}`);
       const data = await response.json();
-      console.log('Chart data received:', data); // ADD THIS LINE
+      console.log('Chart data received:', data);
       setChartData(data.charts || []);
-      console.log('Chart data set to state:', data.charts); // ADD THIS LINE
+      console.log('Chart data set to state:', data.charts);
     } catch (error) {
       console.error('Failed to fetch chart data:', error);
     }
@@ -134,36 +132,51 @@ export default function App() {
   };
 
   const renderCharts = () => {
-  console.log('renderCharts called, syncStatus:', syncStatus, 'chartData length:', chartData.length);
-  
-  if (syncStatus?.status !== 'completed' || chartData.length === 0) {
-    return null;
-  }
+    console.log('renderCharts called, syncStatus:', syncStatus, 'chartData length:', chartData.length);
+    
+    if (syncStatus?.status !== 'completed' || chartData.length === 0) {
+      return null;
+    }
 
-  return (
-    <div style={{ marginTop: '20px' }}>
-      <BlockStack gap="400">
-        {chartData.map((chart, index) => (
-          <Card key={index}>
-            <div style={{ padding: '16px' }}>
-              <Plot
-                data={chart.data}
-                layout={{
-                  ...chart.layout,
-                  autosize: true,
-                  margin: { t: 60, r: 40, b: 60, l: 60 }
-                }}
-                config={{ responsive: true, displayModeBar: false }}
-                style={{ width: '100%', height: '400px' }}
-                useResizeHandler={true}
-              />
-            </div>
-          </Card>
-        ))}
-      </BlockStack>
-    </div>
-  );
-};
+    return (
+      <div style={{ marginTop: '20px' }}>
+        <Layout>
+          {chartData.map((chart, index) => {
+            // Extract title as string
+            const titleText = typeof chart.layout.title === 'string' 
+              ? chart.layout.title 
+              : chart.layout.title?.text || '';
+            
+            return (
+              <Layout.Section key={index} variant="oneHalf">
+                <Card>
+                  <BlockStack gap="400">
+                    <div style={{ padding: '16px 16px 0 16px' }}>
+                      <Text as="h2" variant="headingMd">
+                        {titleText}
+                      </Text>
+                    </div>
+                    <Plot
+                      data={chart.data}
+                      layout={{
+                        ...chart.layout,
+                        title: undefined,  // Remove Plotly title, use Polaris Text instead
+                        autosize: true,
+                        margin: { t: 20, r: 40, b: 60, l: 60 }
+                      }}
+                      config={{ responsive: true, displayModeBar: false }}
+                      style={{ width: '100%', height: '400px' }}
+                      useResizeHandler={true}
+                    />
+                  </BlockStack>
+                </Card>
+              </Layout.Section>
+            );
+          })}
+        </Layout>
+      </div>
+    );
+  };
 
   return (
     <ShopifyEmbedGate>
