@@ -6,6 +6,7 @@ import hashlib
 import base64
 from typing import Optional
 import os
+import traceback
 
 router = APIRouter()
 
@@ -39,89 +40,153 @@ async def process_webhook(shop_domain: str, topic: str, payload: dict):
     """
     async with get_conn() as conn:
         async with conn.cursor() as cur:
-            # Get shop_id for later use
-            await cur.execute(
-                "SELECT shop_id FROM shopify.shops WHERE shop_domain = %s",
-                (shop_domain,)
-            )
-            shop_row = await cur.fetchone()
-            if not shop_row:
-                print(f"Warning: Shop {shop_domain} not found in database")
-                return
-            
-            shop_id = shop_row[0]
-            
-            # Route to appropriate handler based on topic
-            if topic == "orders/create" or topic == "orders/updated":
-                await process_order_webhook(cur, shop_id, payload)
-            elif topic == "products/create" or topic == "products/update":
-                await process_product_webhook(cur, shop_id, payload)
-            elif topic == "customers/create" or topic == "customers/update":
-                await process_customer_webhook(cur, shop_id, payload)
-            # Add more topic handlers as needed
-            
-            await conn.commit()
+            try:
+                # Get shop_id for later use
+                await cur.execute(
+                    "SELECT shop_id FROM shopify.shops WHERE shop_domain = %s",
+                    (shop_domain,)
+                )
+                shop_row = await cur.fetchone()
+                if not shop_row:
+                    print(f"⚠️  Warning: Shop {shop_domain} not found in database")
+                    return
+                
+                shop_id = shop_row[0]
+                entity_id = payload.get("id")  # Order/product/customer ID
+                
+                # Route to appropriate handler based on topic
+                if topic == "orders/create" or topic == "orders/updated":
+                    await process_order_webhook(cur, shop_id, payload)
+                elif topic == "products/create" or topic == "products/update":
+                    await process_product_webhook(cur, shop_id, payload)
+                elif topic == "customers/create" or topic == "customers/update":
+                    await process_customer_webhook(cur, shop_id, payload)
+                else:
+                    print(f"⚠️  Unknown webhook topic: {topic}")
+                
+                await conn.commit()
+                
+                # Mark webhook as processed
+                await cur.execute(
+                    """
+                    UPDATE shopify.webhooks_received 
+                    SET processed = true 
+                    WHERE shop_id = %s 
+                      AND topic = %s 
+                      AND payload_json->>'id' = %s
+                      AND processed = false
+                    """,
+                    (shop_id, topic, str(entity_id))
+                )
+                await conn.commit()
+                
+                print(f"✅ Webhook processed: {topic} for ID {entity_id}")
+                
+            except Exception as e:
+                print(f"❌ Error processing webhook: {e}")
+                traceback.print_exc()
+                await conn.rollback()
 
 
 async def process_order_webhook(cur, shop_id: int, payload: dict):
-    """Process orders/create and orders/updated webhooks."""
+    """
+    Process orders/create and orders/updated webhooks.
+    Now includes: email, order_number, line_items, raw_json
+    """
     order_id = payload.get("id")
     
-    # Upsert order data
+    # Extract customer info
+    customer_id = None
+    email = None
+    if payload.get("customer"):
+        customer_id = payload.get("customer", {}).get("id")
+        email = payload.get("email") or payload.get("customer", {}).get("email")
+    else:
+        email = payload.get("email")
+    
+    # Extract order number (can be in different formats)
+    order_number = payload.get("order_number")
+    if not order_number and payload.get("name"):
+        # Remove the # prefix from name if present
+        order_number = payload.get("name").replace("#", "")
+    
+    # Extract shipping price with fallback logic
+    shipping_price = "0.00"
+    if payload.get("total_shipping_price_set"):
+        shipping_price = payload.get("total_shipping_price_set", {}).get("shop_money", {}).get("amount", "0.00")
+    elif payload.get("shipping_price"):
+        shipping_price = payload.get("shipping_price")
+    
+    # Upsert order data with ALL fields
     await cur.execute(
         """
         INSERT INTO shopify.orders (
             shop_id,
             order_id,
-            order_number,
+            customer_id,
             email,
-            total_price,
-            subtotal_price,
-            total_tax,
-            currency,
+            name,
+            order_number,
+            processed_at,
             financial_status,
             fulfillment_status,
-            created_at,
-            updated_at,
-            customer_id,
+            currency,
+            subtotal_price,
+            total_discounts,
+            total_tax,
+            shipping_price,
+            total_price,
             line_items,
-            raw_json
+            raw_json,
+            created_at,
+            updated_at
         ) VALUES (
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 
+            %s, %s, %s, %s, %s, %s, %s, %s, %s
         )
         ON CONFLICT (shop_id, order_id) 
         DO UPDATE SET
-            order_number = EXCLUDED.order_number,
+            customer_id = EXCLUDED.customer_id,
             email = EXCLUDED.email,
-            total_price = EXCLUDED.total_price,
-            subtotal_price = EXCLUDED.subtotal_price,
-            total_tax = EXCLUDED.total_tax,
-            currency = EXCLUDED.currency,
+            name = EXCLUDED.name,
+            order_number = EXCLUDED.order_number,
+            processed_at = EXCLUDED.processed_at,
             financial_status = EXCLUDED.financial_status,
             fulfillment_status = EXCLUDED.fulfillment_status,
-            updated_at = EXCLUDED.updated_at,
-            customer_id = EXCLUDED.customer_id,
+            currency = EXCLUDED.currency,
+            subtotal_price = EXCLUDED.subtotal_price,
+            total_discounts = EXCLUDED.total_discounts,
+            total_tax = EXCLUDED.total_tax,
+            shipping_price = EXCLUDED.shipping_price,
+            total_price = EXCLUDED.total_price,
             line_items = EXCLUDED.line_items,
-            raw_json = EXCLUDED.raw_json;
+            raw_json = EXCLUDED.raw_json,
+            updated_at = EXCLUDED.updated_at;
         """,
         (
             shop_id,
             order_id,
-            payload.get("order_number"),
-            payload.get("email"),
-            payload.get("total_price"),
-            payload.get("subtotal_price"),
-            payload.get("total_tax"),
-            payload.get("currency"),
+            customer_id,
+            email,
+            payload.get("name"),  # Order name like "#1001"
+            order_number,
+            payload.get("processed_at"),
             payload.get("financial_status"),
             payload.get("fulfillment_status"),
+            payload.get("currency", "USD"),
+            payload.get("subtotal_price", "0.00"),
+            payload.get("total_discounts", "0.00"),
+            payload.get("total_tax", "0.00"),
+            shipping_price,
+            payload.get("total_price", "0.00"),
+            json.dumps(payload.get("line_items", [])),  # Store product info
+            json.dumps(payload),  # Store complete webhook for debugging
             payload.get("created_at"),
-            payload.get("updated_at"),
-            payload.get("customer", {}).get("id"),
-            json.dumps(payload.get("line_items", [])),
-            json.dumps(payload)
+            payload.get("updated_at")
         )
     )
+    
+    print(f"✅ Processed order {payload.get('name')} - ${payload.get('total_price')} from {email}")
 
 
 async def process_product_webhook(cur, shop_id: int, payload: dict):
@@ -338,9 +403,6 @@ async def test_webhook_ingest(
     return {"status": "ok", "message": "Test webhook received"}
 
 
-# Fixed webhook status endpoint
-# Replace the @router.get("/status") function in commerce_app/core/routers/webhooks.py
-
 @router.get("/status")
 async def webhook_status(shop_domain: Optional[str] = None, limit: int = 100):
     """
@@ -396,6 +458,9 @@ async def webhook_status(shop_domain: Optional[str] = None, limit: int = 100):
                     for row in rows
                 ]
     except Exception as e:
-        import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+
+
