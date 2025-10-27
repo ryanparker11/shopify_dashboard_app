@@ -32,6 +32,20 @@ app.include_router(analytics.router)
 
 
 
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://app.lodestaranalytics.io",
+        "http://localhost:5173",  # for local development
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
 @app.get("/healthz")
 def healthz():
     return {"status": "ok"}
