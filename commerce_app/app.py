@@ -74,17 +74,7 @@ BUILD_ID = os.environ.get("BUILD_ID", "dev")
 def whoami():
     return {"module": "commerce_app.app", "build_id": BUILD_ID}
 
-from fastapi.middleware.cors import CORSMiddleware
 
-origins = ["https://app.lodestaranalytics.io"]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["GET","POST","PUT","DELETE","OPTIONS"],
-    allow_headers=["*"],
-)
 
 #if __name__ == "__main__":
 #    uvicorn.run("app:dashboard", host="0.0.0.0", port=8000, factory=False)
