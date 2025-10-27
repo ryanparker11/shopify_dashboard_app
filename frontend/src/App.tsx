@@ -65,9 +65,11 @@ export default function App() {
   const fetchChartData = async (shopName: string) => {
     try {
       // Fetch your chart data from your backend API
-      const response = await fetch(`${API_URL}/charts/${shopName}`);
+      const response = await fetch(`${API_URL}/api/charts/${shopName}`);
       const data = await response.json();
+      console.log('Chart data received:', data); // ADD THIS LINE
       setChartData(data.charts || []);
+      console.log('Chart data set to state:', data.charts); // ADD THIS LINE
     } catch (error) {
       console.error('Failed to fetch chart data:', error);
     }
@@ -132,6 +134,7 @@ export default function App() {
   };
 
   const renderCharts = () => {
+    console.log('renderCharts called, syncStatus:', syncStatus, 'chartData length:', chartData.length);
     if (syncStatus?.status !== 'completed' || chartData.length === 0) {
       return null;
     }
