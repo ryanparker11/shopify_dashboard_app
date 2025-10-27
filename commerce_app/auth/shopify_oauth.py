@@ -352,22 +352,22 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
         logger.info(f"✅ Bulk sync complete for {shop}: {total_orders} orders imported ({errors} errors)")
 
 
-async def mark_sync_failed(shop_id: int, error_message: str):
-    """Mark initial sync as failed in database."""
-    try:
-        from commerce_app.core.db import get_conn
-        async with get_conn() as conn:
-            async with conn.cursor() as cur:
-                await cur.execute(
-                    """UPDATE shopify.shops 
-                       SET initial_sync_status = 'failed',
-                           initial_sync_error = %s
-                       WHERE shop_id = %s""",
-                    (error_message, shop_id)
-                )
-                await conn.commit()
-    except Exception as e:
-        logger.error(f"Failed to mark sync as failed: {e}")
+#async def mark_sync_failed(shop_id: int, error_message: str):
+#    """Mark initial sync as failed in database."""
+#    try:
+#        from commerce_app.core.db import get_conn
+#        async with get_conn() as conn:
+#            async with conn.cursor() as cur:
+#                await cur.execute(
+#                    """UPDATE shopify.shops 
+#                       SET initial_sync_status = 'failed',
+#                           initial_sync_error = %s
+#                       WHERE shop_id = %s""",
+#                    (error_message, shop_id)
+#                )
+#                await conn.commit()
+#    except Exception as e:
+#        logger.error(f"Failed to mark sync as failed: {e}")
 
 
 @router.get("/start")
