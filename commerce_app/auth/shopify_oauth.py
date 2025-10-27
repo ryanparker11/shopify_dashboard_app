@@ -75,14 +75,14 @@ async def register_webhooks(shop: str, access_token: str):
                 )
                 
                 if response.status_code == 201:
-                    logger.info(f"✅ Registered webhook: {webhook_config['topic']} for {shop}")
+                    print(f"✅ Registered webhook: {webhook_config['topic']} for {shop}")
                 elif response.status_code == 422:
-                    logger.warning(f"⚠️  Webhook already exists: {webhook_config['topic']} for {shop}")
+                    print(f"⚠️  Webhook already exists: {webhook_config['topic']} for {shop}")
                 else:
-                    logger.error(f"❌ Failed to register webhook {webhook_config['topic']}: {response.text}")
+                    print(f"❌ Failed to register webhook {webhook_config['topic']}: {response.text}")
                     
             except Exception as e:
-                logger.error(f"❌ Error registering webhook {webhook_config['topic']}: {e}")
+                print(f"❌ Error registering webhook {webhook_config['topic']}: {e}")
 
 
 async def initial_data_sync(shop: str, shop_id: int, access_token: str):
@@ -91,7 +91,7 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
     Much faster than REST pagination - no rate limits!
     Runs in background, updates progress in database.
     """
-    logger.info(f"🔄 Starting bulk initial sync for {shop}")
+    print(f"🔄 Starting bulk initial sync for {shop}")
     
     # Import here to avoid circular imports
     from commerce_app.core.db import get_conn
@@ -107,7 +107,7 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
                 )
                 await conn.commit()
     except Exception as e:
-        logger.error(f"Failed to update sync status: {e}")
+        print(f"Failed to update sync status: {e}")
     
     # Step 1: Start bulk operation
     # Build the GraphQL query separately to avoid escaping issues
@@ -179,22 +179,22 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
             )
             
             if response.status_code != 200:
-                logger.error(f"Failed to start bulk operation: {response.text}")
+                print(f"Failed to start bulk operation: {response.text}")
                 await mark_sync_failed(shop_id, "Failed to start bulk operation")
                 return
             
             data = response.json()
             
             if "errors" in data or data.get("data", {}).get("bulkOperationRunQuery", {}).get("userErrors"):
-                logger.error(f"GraphQL errors: {data}")
+                print(f"GraphQL errors: {data}")
                 await mark_sync_failed(shop_id, "GraphQL errors")
                 return
             
             operation_id = data["data"]["bulkOperationRunQuery"]["bulkOperation"]["id"]
-            logger.info(f"✅ Started bulk operation: {operation_id}")
+            print(f"✅ Started bulk operation: {operation_id}")
             
         except Exception as e:
-            logger.error(f"Error starting bulk operation: {e}")
+            print(f"Error starting bulk operation: {e}")
             await mark_sync_failed(shop_id, str(e))
             return
         
@@ -221,7 +221,7 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
         
         while True:
             if asyncio.get_event_loop().time() - start_time > max_wait:
-                logger.error(f"Bulk operation timed out after {max_wait}s")
+                print(f"Bulk operation timed out after {max_wait}s")
                 await mark_sync_failed(shop_id, "Timeout")
                 return
             
@@ -243,41 +243,41 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
                 operation = data.get("data", {}).get("node", {})
                 status = operation.get("status")
                 
-                logger.info(f"📊 Bulk operation status: {status} ({operation.get('objectCount', 0)} objects)")
+                print(f"📊 Bulk operation status: {status} ({operation.get('objectCount', 0)} objects)")
                 
                 if status == "COMPLETED":
                     jsonl_url = operation.get("url")
-                    logger.info(f"✅ Bulk operation completed: {operation.get('objectCount')} orders")
+                    print(f"✅ Bulk operation completed: {operation.get('objectCount')} orders")
                     break
                 elif status in ["FAILED", "CANCELED", "EXPIRED"]:
-                    logger.error(f"Bulk operation failed: {status} - {operation.get('errorCode')}")
+                    print(f"Bulk operation failed: {status} - {operation.get('errorCode')}")
                     jsonl_url = operation.get("partialDataUrl")  # Try partial data
                     break
                 
                 await asyncio.sleep(2)  # Check every 2 seconds
                 
             except Exception as e:
-                logger.error(f"Error polling bulk operation: {e}")
+                print(f"Error polling bulk operation: {e}")
                 await asyncio.sleep(2)
                 continue
         
         if not jsonl_url:
-            logger.error("No data URL returned from bulk operation")
+            print("No data URL returned from bulk operation")
             await mark_sync_failed(shop_id, "No data URL")
             return
         
         # Step 3: Download and process JSONL file
-        logger.info(f"📥 Downloading bulk data from {jsonl_url}")
+        print(f"📥 Downloading bulk data from {jsonl_url}")
         try:
             response = await client.get(jsonl_url, timeout=120.0)
             
             if response.status_code != 200:
-                logger.error(f"Failed to download bulk data: {response.status_code}")
+                print(f"Failed to download bulk data: {response.status_code}")
                 await mark_sync_failed(shop_id, "Download failed")
                 return
             
         except Exception as e:
-            logger.error(f"Error downloading bulk data: {e}")
+            print(f"Error downloading bulk data: {e}")
             await mark_sync_failed(shop_id, str(e))
             return
         
@@ -321,7 +321,7 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
                         # Commit in batches of 100 for performance and update progress
                         if total_orders % 100 == 0:
                             await conn.commit()
-                            logger.info(f"📦 Processed {total_orders} orders...")
+                            print(f"📦 Processed {total_orders} orders...")
                             
                             # Update progress in database
                             await cur.execute(
@@ -331,7 +331,7 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
                             await conn.commit()
                         
                     except Exception as e:
-                        logger.error(f"Error processing order line: {e}")
+                        print(f"Error processing order line: {e}")
                         errors += 1
                         continue
                 
@@ -349,7 +349,7 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
                 )
                 await conn.commit()
         
-        logger.info(f"✅ Bulk sync complete for {shop}: {total_orders} orders imported ({errors} errors)")
+        print(f"✅ Bulk sync complete for {shop}: {total_orders} orders imported ({errors} errors)")
 
 
 #async def mark_sync_failed(shop_id: int, error_message: str):
@@ -367,7 +367,7 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
 #                )
 #                await conn.commit()
 #    except Exception as e:
-#        logger.error(f"Failed to mark sync as failed: {e}")
+#        print(f"Failed to mark sync as failed: {e}")
 
 
 @router.get("/start")
@@ -499,14 +499,14 @@ async def auth_callback(request: Request, background_tasks: BackgroundTasks):
     # Register webhooks and queue initial sync
     try:
         await register_webhooks(shop, access_token)
-        logger.info(f"✅ Webhooks registered for {shop}")
+        print(f"✅ Webhooks registered for {shop}")
         
         # Run initial bulk sync in background (don't wait for it)
         background_tasks.add_task(initial_data_sync, shop, shop_id, access_token)
-        logger.info(f"📋 Bulk sync queued for {shop}")
+        print(f"📋 Bulk sync queued for {shop}")
         
     except Exception as e:
-        logger.error(f"❌ Failed setup for {shop}: {e}")
+        print(f"❌ Failed setup for {shop}: {e}")
         # Don't fail auth flow - merchant is still installed
 
     # Redirect to app immediately (don't wait for sync)
