@@ -27,7 +27,7 @@ templates = Jinja2Templates(directory="commerce_app/ui")
 app.include_router(analytics_router, prefix="/api", tags=["analytics"])
 app.include_router(webhooks.router, prefix="/webhooks", tags=["webhooks"])
 app.include_router(health.router)
-app.include_router(shopify_auth, prefix="/auth")
+app.include_router(shopify_auth)
 #app.include_router(analytics.router)
 
 

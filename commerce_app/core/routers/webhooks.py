@@ -338,56 +338,64 @@ async def test_webhook_ingest(
     return {"status": "ok", "message": "Test webhook received"}
 
 
+# Fixed webhook status endpoint
+# Replace the @router.get("/status") function in commerce_app/core/routers/webhooks.py
+
 @router.get("/status")
 async def webhook_status(shop_domain: Optional[str] = None, limit: int = 100):
     """
     Check webhook processing status.
     Useful for debugging and monitoring.
     """
-    async with get_conn() as conn:
-        async with conn.cursor() as cur:
-            if shop_domain:
-                await cur.execute(
-                    """
-                    SELECT 
-                        w.webhook_id,
-                        w.topic,
-                        w.received_at,
-                        w.processed,
-                        s.shop_domain
-                    FROM shopify.webhooks_received w
-                    LEFT JOIN shopify.shops s ON w.shop_id = s.shop_id
-                    WHERE s.shop_domain = %s
-                    ORDER BY w.received_at DESC
-                    LIMIT %s;
-                    """,
-                    (shop_domain, limit)
-                )
-            else:
-                await cur.execute(
-                    """
-                    SELECT 
-                        w.webhook_id,
-                        w.topic,
-                        w.received_at,
-                        w.processed,
-                        s.shop_domain
-                    FROM shopify.webhooks_received w
-                    LEFT JOIN shopify.shops s ON w.shop_id = s.shop_id
-                    ORDER BY w.received_at DESC
-                    LIMIT %s;
-                    """,
-                    (limit,)
-                )
-            
-            rows = await cur.fetchall()
-            return [
-                {
-                    "webhook_id": row[0],
-                    "topic": row[1],
-                    "received_at": row[2].isoformat() if row[2] else None,
-                    "processed": row[3],
-                    "shop_domain": row[4]
-                }
-                for row in rows
-            ]
+    try:
+        async with get_conn() as conn:
+            async with conn.cursor() as cur:
+                if shop_domain:
+                    await cur.execute(
+                        """
+                        SELECT 
+                            w.id,
+                            w.topic,
+                            w.received_at,
+                            w.processed,
+                            s.shop_domain
+                        FROM shopify.webhooks_received w
+                        LEFT JOIN shopify.shops s ON w.shop_id = s.shop_id
+                        WHERE s.shop_domain = %s
+                        ORDER BY w.received_at DESC
+                        LIMIT %s;
+                        """,
+                        (shop_domain, limit)
+                    )
+                else:
+                    await cur.execute(
+                        """
+                        SELECT 
+                            w.id,
+                            w.topic,
+                            w.received_at,
+                            w.processed,
+                            s.shop_domain
+                        FROM shopify.webhooks_received w
+                        LEFT JOIN shopify.shops s ON w.shop_id = s.shop_id
+                        ORDER BY w.received_at DESC
+                        LIMIT %s;
+                        """,
+                        (limit,)
+                    )
+                
+                rows = await cur.fetchall()
+                return [
+                    {
+                        "webhook_id": row[0],
+                        "topic": row[1],
+                        "received_at": row[2].isoformat() if row[2] else None,
+                        "processed": row[3],
+                        "shop_domain": row[4]
+                    }
+                    for row in rows
+                ]
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
