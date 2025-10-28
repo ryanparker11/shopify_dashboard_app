@@ -19,7 +19,7 @@ SHOPIFY_API_KEY = os.environ["SHOPIFY_API_KEY"]
 SHOPIFY_API_SECRET = os.environ["SHOPIFY_API_SECRET"]
 APP_URL = os.environ["APP_URL"].rstrip("/")
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://app.lodestaranalytics.io")  # ADD THIS LINE
-SCOPES = os.environ.get("SCOPES", "read_products,read_orders")
+SCOPES = ("read_customers,write_customers,read_fulfillments,write_fulfillments,write_inventory,read_inventory,read_orders,write_orders,read_products,write_products")
 GRANT_PER_USER = os.environ.get("GRANT_OPTIONS_PER_USER", "false").lower() == "true"
 
 def db():
