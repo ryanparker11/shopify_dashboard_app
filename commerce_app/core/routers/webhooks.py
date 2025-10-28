@@ -404,7 +404,7 @@ async def test_webhook_ingest(
             webhook_id = result[0] if result else None
             await conn.commit()
      
-    background_tasks.add_task(process_webhook, webhook_id, shop_row[0], x_shopify_topic, payload)
+    background_tasks.add_task(process_webhook, webhook_id, shop_row[0], x_shopify_topic, json.dumps(payload))
     return {"status": "ok", "message": "Test webhook received"}
 
 
