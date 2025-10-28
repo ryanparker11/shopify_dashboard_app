@@ -515,7 +515,40 @@ async def auth_callback(request: Request, background_tasks: BackgroundTasks):
     if not host:
         host = base64.b64encode(f"{shop}/admin".encode()).decode()
 
-    return RedirectResponse(url=f"{FRONTEND_URL}/app?shop={shop}&host={urlparse.quote(host)}")
+    # Use Shopify's exitIframe to properly redirect
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
+        <script>
+            document.addEventListener('DOMContentLoaded', function() {{
+                if (window.top !== window.self) {{
+                    // Embedded in iframe - use App Bridge redirect
+                    var AppBridge = window['app-bridge'];
+                    var createApp = AppBridge.default;
+                    var Redirect = AppBridge.actions.Redirect;
+                
+                    var app = createApp({{
+                        apiKey: '{SHOPIFY_API_KEY}',
+                        host: '{host}'
+                    }});
+                
+                    var redirect = Redirect.create(app);
+                    redirect.dispatch(Redirect.Action.ADMIN_PATH, '/apps/{SHOPIFY_API_KEY}');
+                }} else {{
+                    // Not embedded - direct redirect
+                    window.location.href = 'https://{shop}/admin/apps/{SHOPIFY_API_KEY}';
+                }}
+            }});
+        </script>
+    </head>
+    <body>
+        <p>Redirecting to app...</p>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html)
 
 
 @router.get("/sync-status/{shop_domain}")
