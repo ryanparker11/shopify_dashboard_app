@@ -23,8 +23,14 @@ SCOPES = os.environ.get("SCOPES", "read_products,read_orders")
 GRANT_PER_USER = os.environ.get("GRANT_OPTIONS_PER_USER", "false").lower() == "true"
 
 def db():
+    # Build from components instead of DATABASE_URL
+    DB_HOST = os.getenv("DB_HOST")
+    DB_NAME = os.getenv("DB_NAME")
+    DB_USER = os.getenv("DB_USER")
+    DB_PASSWORD = os.getenv("DB_PASSWORD")
+    DB_PORT = os.getenv("DB_PORT", "5432")
     return psycopg2.connect(
-        os.environ["DATABASE_URL"], cursor_factory=RealDictCursor
+        f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}?sslmode=require", cursor_factory=RealDictCursor
     )
 
 def is_valid_shop(shop: str) -> bool:
