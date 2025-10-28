@@ -18,6 +18,7 @@ router = APIRouter(prefix="/auth", tags=["shopify-auth"])
 SHOPIFY_API_KEY = os.environ["SHOPIFY_API_KEY"]
 SHOPIFY_API_SECRET = os.environ["SHOPIFY_API_SECRET"]
 APP_URL = os.environ["APP_URL"].rstrip("/")
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://app.lodestaranalytics.io")  # ADD THIS LINE
 SCOPES = os.environ.get("SCOPES", "read_products,read_orders")
 GRANT_PER_USER = os.environ.get("GRANT_OPTIONS_PER_USER", "false").lower() == "true"
 
@@ -514,7 +515,7 @@ async def auth_callback(request: Request, background_tasks: BackgroundTasks):
     if not host:
         host = base64.b64encode(f"{shop}/admin".encode()).decode()
 
-    return RedirectResponse(url=f"{APP_URL}/app?shop={shop}&host={urlparse.quote(host)}")
+    return RedirectResponse(url=f"{FRONTEND_URL}/app?shop={shop}&host={urlparse.quote(host)}")
 
 
 @router.get("/sync-status/{shop_domain}")
