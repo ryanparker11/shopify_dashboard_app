@@ -177,7 +177,7 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
         # Start bulk operation
         try:
             response = await client.post(
-                f"https://{shop}/admin/api/2024-10/graphql.json",
+                f"https://{shop}/admin/api/2025-10/graphql.json",
                 headers={
                     "X-Shopify-Access-Token": access_token,
                     "Content-Type": "application/json"
@@ -234,7 +234,7 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
             
             try:
                 response = await client.post(
-                    f"https://{shop}/admin/api/2024-10/graphql.json",
+                    f"https://{shop}/admin/api/2025-10/graphql.json",
                     headers={
                         "X-Shopify-Access-Token": access_token,
                         "Content-Type": "application/json"
@@ -491,7 +491,7 @@ async def auth_callback(request: Request, background_tasks: BackgroundTasks):
         print(f"🔍 TOKEN RESPONSE: {json.dumps(data, indent=2)}")
         # Fetch shop details
         shop_info_response = await client.get(
-            f"https://{shop}/admin/api/2024-10/shop.json",
+            f"https://{shop}/admin/api/2025-10/shop.json",
             headers={"X-Shopify-Access-Token": access_token}
         )
         

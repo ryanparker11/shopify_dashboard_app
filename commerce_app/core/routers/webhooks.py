@@ -371,6 +371,7 @@ async def webhook_ingest(
 @router.post("/test-ingest")
 async def test_webhook_ingest(
     request: Request,
+    background_tasks: BackgroundTasks,
     x_shopify_topic: str = Header(...),
     x_shopify_shop_domain: str = Header(...)
 ):
@@ -398,8 +399,12 @@ async def test_webhook_ingest(
                 """,
                 (shop_row[0], x_shopify_topic, json.dumps(payload))
             )
+            # Get the webhook_id
+            result = await cur.fetchone()
+            webhook_id = result[0] if result else None
             await conn.commit()
-    
+     
+    background_tasks.add_task(process_webhook, webhook_id, shop_row[0], x_shopify_topic, payload)
     return {"status": "ok", "message": "Test webhook received"}
 
 

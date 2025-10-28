@@ -12,7 +12,7 @@ from psycopg2.extras import RealDictCursor
 load_dotenv()
 
 
-SHOP_DOMAIN = "test-auth-1-2.myshopify.com"
+SHOP_DOMAIN = "dashboard-mvp.myshopify.com"
 APP_URL = "https://api.lodestaranalytics.io"
 
 print("=" * 70)
@@ -123,7 +123,7 @@ error_count = 0
 for webhook_config in webhooks_to_create:
     try:
         response = requests.post(
-            f"https://{SHOP_DOMAIN}/admin/api/2024-10/webhooks.json",
+            f"https://{SHOP_DOMAIN}/admin/api/2025-10/webhooks.json",
             headers={
                 "X-Shopify-Access-Token": access_token,
                 "Content-Type": "application/json"
