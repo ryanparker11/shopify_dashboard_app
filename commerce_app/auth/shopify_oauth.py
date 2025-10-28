@@ -446,7 +446,7 @@ async def auth_callback(request: Request, background_tasks: BackgroundTasks):
     if not cookie_state or cookie_state != state:
         raise HTTPException(status_code=400, detail="State mismatch")
 
-        # NEW: Check if we already have this shop installed recently
+    # Check if we already have this shop installed recently
     conn = db()
     with conn, conn.cursor() as cur:
         cur.execute(
@@ -465,10 +465,8 @@ async def auth_callback(request: Request, background_tasks: BackgroundTasks):
             if existing_shop['updated_at'] > datetime.now(timezone.utc) - timedelta(seconds=30):
                 print(f"⚠️  Shop {shop} already installed recently, skipping duplicate callback")
                 # Skip to redirect
-                host = get_cookie(request, "shopify_host")
-                if not host:
-                    host = base64.b64encode(f"{shop}/admin".encode()).decode()
-                return RedirectResponse(url=f"{FRONTEND_URL}?shop={shop}&host={urlparse.quote(host)}")
+                redirect_url = f"https://{shop}/admin/apps"
+                return RedirectResponse(url=redirect_url, status_code=302)
 
     # Exchange code -> token (ONLY ONCE!)
     token_url = f"https://{shop}/admin/oauth/access_token"
@@ -502,30 +500,43 @@ async def auth_callback(request: Request, background_tasks: BackgroundTasks):
     # Upsert shop record
     conn = db()
     with conn, conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO shopify.shops (
-                shop_domain, 
-                shop_name, 
-                access_token, 
-                access_scope, 
-                installed_at, 
-                updated_at,
-                initial_sync_status
+        try:
+            cur.execute(
+                """
+                INSERT INTO shopify.shops (
+                    shop_domain, 
+                    shop_name, 
+                    access_token, 
+                    access_scope, 
+                    installed_at, 
+                    updated_at,
+                    initial_sync_status
+                )
+                VALUES (%s, %s, %s, %s, now(), now(), 'pending')
+                ON CONFLICT (shop_domain)
+                DO UPDATE SET 
+                    shop_name = EXCLUDED.shop_name,
+                    access_token = EXCLUDED.access_token,
+                    access_scope = EXCLUDED.access_scope,
+                    updated_at = now(),
+                    initial_sync_status = 'pending'
+                RETURNING shop_id;
+                """,
+                (shop, shop_name, access_token, scope),
             )
-            VALUES (%s, %s, %s, %s, now(), now(), 'pending')
-            ON CONFLICT (shop_domain)
-            DO UPDATE SET 
-                shop_name = EXCLUDED.shop_name,
-                access_token = EXCLUDED.access_token,
-                access_scope = EXCLUDED.access_scope,
-                updated_at = now(),
-                initial_sync_status = 'pending'
-            RETURNING shop_id;
-            """,
-            (shop, shop_name, access_token, scope),
-        )
-        shop_id = cur.fetchone()["shop_id"]
+            shop_id = cur.fetchone()["shop_id"]
+        except Exception as e:
+            # If insert fails, try to get existing shop_id
+            print(f"⚠️  Insert failed, fetching existing shop: {e}")
+            conn.rollback()
+            cur.execute(
+                "SELECT shop_id FROM shopify.shops WHERE shop_domain = %s",
+                (shop,)
+            )
+            result = cur.fetchone()
+            shop_id = result["shop_id"] if result else None
+            if not shop_id:
+                raise HTTPException(status_code=500, detail="Failed to save shop")
 
     # Register webhooks and queue initial sync
     try:
@@ -540,45 +551,9 @@ async def auth_callback(request: Request, background_tasks: BackgroundTasks):
         print(f"❌ Failed setup for {shop}: {e}")
         # Don't fail auth flow - merchant is still installed
 
-    # Redirect to app immediately (don't wait for sync)
-    host = get_cookie(request, "shopify_host")
-    if not host:
-        host = base64.b64encode(f"{shop}/admin".encode()).decode()
-
-    # Use Shopify's exitIframe to properly redirect
-    html = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
-        <script>
-            document.addEventListener('DOMContentLoaded', function() {{
-                if (window.top !== window.self) {{
-                    // Embedded in iframe - use App Bridge redirect
-                    var AppBridge = window['app-bridge'];
-                    var createApp = AppBridge.default;
-                    var Redirect = AppBridge.actions.Redirect;
-                
-                    var app = createApp({{
-                        apiKey: '{SHOPIFY_API_KEY}',
-                        host: '{host}'
-                    }});
-                
-                    var redirect = Redirect.create(app);
-                    redirect.dispatch(Redirect.Action.ADMIN_PATH, '/apps/{SHOPIFY_API_KEY}');
-                }} else {{
-                    // Not embedded - direct redirect
-                    window.location.href = 'https://{shop}/admin/apps/{SHOPIFY_API_KEY}';
-                }}
-            }});
-        </script>
-    </head>
-    <body>
-        <p>Redirecting to app...</p>
-    </body>
-    </html>
-    """
-    return HTMLResponse(content=html)
+    # Redirect to Shopify admin apps page
+    redirect_url = f"https://{shop}/admin/apps"
+    return RedirectResponse(url=redirect_url, status_code=302)
 
 
 @router.get("/sync-status/{shop_domain}")

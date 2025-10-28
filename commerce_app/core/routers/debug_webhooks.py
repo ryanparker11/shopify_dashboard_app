@@ -11,7 +11,8 @@ from psycopg2.extras import RealDictCursor
 
 load_dotenv()
 
-SHOP_DOMAIN = "dashboard-mvp.myshopify.com"
+
+SHOP_DOMAIN = "test-auth-1-2.myshopify.com"
 APP_URL = "https://api.lodestaranalytics.io"
 
 print("=" * 70)
