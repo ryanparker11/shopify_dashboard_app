@@ -440,6 +440,30 @@ async def auth_callback(request: Request, background_tasks: BackgroundTasks):
     if not cookie_state or cookie_state != state:
         raise HTTPException(status_code=400, detail="State mismatch")
 
+        # NEW: Check if we already have this shop installed recently
+    conn = db()
+    with conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT shop_id, access_token, updated_at 
+            FROM shopify.shops 
+            WHERE shop_domain = %s
+            """,
+            (shop,)
+        )
+        existing_shop = cur.fetchone()
+        
+        # If shop was updated in last 30 seconds, skip token exchange (already done)
+        if existing_shop and existing_shop['updated_at']:
+            from datetime import datetime, timezone, timedelta
+            if existing_shop['updated_at'] > datetime.now(timezone.utc) - timedelta(seconds=30):
+                print(f"⚠️  Shop {shop} already installed recently, skipping duplicate callback")
+                # Skip to redirect
+                host = get_cookie(request, "shopify_host")
+                if not host:
+                    host = base64.b64encode(f"{shop}/admin".encode()).decode()
+                return RedirectResponse(url=f"{FRONTEND_URL}?shop={shop}&host={urlparse.quote(host)}")
+
     # Exchange code -> token (ONLY ONCE!)
     token_url = f"https://{shop}/admin/oauth/access_token"
     payload = {
