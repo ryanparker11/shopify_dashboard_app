@@ -371,14 +371,11 @@ async def webhook_ingest(
 @router.post("/test-ingest")
 async def test_webhook_ingest(
     request: Request,
-    background_tasks: BackgroundTasks,
     x_shopify_topic: str = Header(...),
     x_shopify_shop_domain: str = Header(...)
 ):
-    """
-    Test endpoint without HMAC verification.
-    REMOVE THIS IN PRODUCTION!
-    """
+    """Test endpoint without HMAC verification.
+    REMOVE IN PRODUCTION!"""
     payload = await request.json()
     
     async with get_conn() as conn:
@@ -392,20 +389,36 @@ async def test_webhook_ingest(
             if not shop_row:
                 return {"status": "accepted", "message": "Shop not registered"}
             
+            shop_id = shop_row[0]
+            
+            # Store webhook as processed
             await cur.execute(
                 """
                 INSERT INTO shopify.webhooks_received (shop_id, topic, payload_json, processed)
-                VALUES (%s, %s, %s::jsonb, false);
+                VALUES (%s, %s, %s::jsonb, true);
                 """,
-                (shop_row[0], x_shopify_topic, json.dumps(payload))
+                (shop_id, x_shopify_topic, json.dumps(payload))
             )
-            # Get the webhook_id
-            result = await cur.fetchone()
-            webhook_id = result[0] if result else None
+            
+            # Process order if it's an order webhook
+            if x_shopify_topic in ["orders/create", "orders/updated"]:
+                await cur.execute("""
+                    INSERT INTO shopify.orders (shop_id, shopify_order_id, order_number, total_price, created_at)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (shop_id, shopify_order_id) DO UPDATE SET
+                        total_price = EXCLUDED.total_price,
+                        updated_at = now()
+                """, (
+                    shop_id,
+                    payload.get('id'),
+                    payload.get('order_number'),
+                    payload.get('total_price'),
+                    payload.get('created_at')
+                ))
+            
             await conn.commit()
-     
-    background_tasks.add_task(process_webhook, webhook_id, shop_row[0], x_shopify_topic, json.dumps(payload))
-    return {"status": "ok", "message": "Test webhook received"}
+    
+    return {"status": "ok", "message": "Webhook processed"}
 
 
 @router.get("/status")
