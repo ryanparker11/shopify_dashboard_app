@@ -405,9 +405,6 @@ async def test_webhook_ingest(
                 await cur.execute("""
                     INSERT INTO shopify.orders (shop_id, order_id, order_number, total_price, created_at)
                     VALUES (%s, %s, %s, %s, %s)
-                    ON CONFLICT (shop_id, order_id) DO UPDATE SET
-                        total_price = EXCLUDED.total_price,
-                        updated_at = now()
                 """, (
                     shop_id,
                     payload.get('id'),
