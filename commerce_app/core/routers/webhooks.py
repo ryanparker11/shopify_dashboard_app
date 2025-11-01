@@ -10,7 +10,7 @@ import traceback
 
 router = APIRouter()
 
-def verify_webhook(body: bytes, hmac_header: str, secret: str) -> bool:
+def verify_webhook(body: bytes, hmac_header: str, secret: str) -> bool:   
     """
     Verify Shopify webhook HMAC signature.
     
@@ -31,6 +31,13 @@ def verify_webhook(body: bytes, hmac_header: str, secret: str) -> bool:
     ).decode('utf-8')
     
     return hmac.compare_digest(computed_hmac, hmac_header)
+
+def verify_any(body: bytes, header: str, secrets: list[str]) -> bool:
+#Try multiple possible secrets until one verifies.
+    for s in secrets:
+        if s and verify_webhook(body, header, s):
+            return True
+    return False
 
 
 async def process_webhook(shop_domain: str, topic: str, payload: dict, webhook_row_id: int):
@@ -308,13 +315,15 @@ async def webhook_ingest(
     # Get raw body for HMAC verification
     body = await request.body()
 
+    
     # Verify webhook authenticity
     # Use SHOPIFY_API_SECRET (same secret for OAuth and webhooks)
     webhook_secret = os.getenv("SHOPIFY_API_SECRET")
-    if not webhook_secret:
-        raise HTTPException(500, "SHOPIFY_API_SECRET not configured")
-    
-    if not verify_webhook(body, x_shopify_hmac_sha256, webhook_secret):
+    app_secret = os.getenv("SHOPIFY_API_SECRET")              # shpss_... from app credentials
+    store_secret = os.getenv("SHOPIFY_STORE_WEBHOOK_SECRET")  # hex string from Notifications page
+
+    # Try verifying with either one
+    if not verify_any(body, x_shopify_hmac_sha256.strip(), [app_secret, store_secret]):
         raise HTTPException(401, "Invalid webhook signature")
     
     # Parse JSON payload
