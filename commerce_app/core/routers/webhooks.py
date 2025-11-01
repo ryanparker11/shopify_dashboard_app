@@ -33,7 +33,7 @@ def verify_webhook(body: bytes, hmac_header: str, secret: str) -> bool:
     return hmac.compare_digest(computed_hmac, hmac_header)
 
 
-async def process_webhook(shop_domain: str, topic: str, payload: dict):
+async def process_webhook(shop_domain: str, topic: str, payload: dict, webhook_row_id: int):
     """
     Process webhook payload and update relevant tables.
     This runs in the background after the webhook response is sent.
@@ -73,14 +73,14 @@ async def process_webhook(shop_domain: str, topic: str, payload: dict):
                     SET processed = true 
                     WHERE shop_id = %s 
                       AND topic = %s 
-                      AND payload_json->>'id' = %s
+                      AND id = %s
                       AND processed = false
                     """,
-                    (shop_id, topic, str(entity_id))
+                    (shop_id, topic, webhook_row_id)
                 )
                 await conn.commit()
                 
-                print(f"✅ Webhook processed: {topic} for ID {entity_id}")
+                print(f"✅ Webhook processed: {topic} (row {webhook_row_id}) for ID {entity_id}")
                 
             except Exception as e:
                 print(f"❌ Error processing webhook: {e}")
@@ -322,14 +322,17 @@ async def webhook_ingest(
         payload = json.loads(body)
     except json.JSONDecodeError:
         raise HTTPException(400, "Invalid JSON payload")
+    
+    # Normalize domain (safer lookup)
+    shop_domain = x_shopify_shop_domain.strip().lower()
 
-    # Store raw webhook immediately
+    # Store raw webhook immediately and capture row id
     async with get_conn() as conn:
         async with conn.cursor() as cur:
             # Check if shop exists
             await cur.execute(
                 "SELECT shop_id FROM shopify.shops WHERE shop_domain = %s",
-                (x_shopify_shop_domain,)
+                (shop_domain,)
             )
             shop_row = await cur.fetchone()
             
@@ -348,13 +351,16 @@ async def webhook_ingest(
                 return {"status": "accepted", "message": "Shop not registered"}
             
             # Store webhook
+            shop_id = shop_row[0]
             await cur.execute(
                 """
                 INSERT INTO shopify.webhooks_received (shop_id, topic, payload_json, processed)
-                VALUES (%s, %s, %s::jsonb, false);
+                VALUES (%s, %s, %s::jsonb, false)
+                RETURNING id;
                 """,
-                (shop_row[0], x_shopify_topic, json.dumps(payload))
+                (shop_id, x_shopify_topic, json.dumps(payload))
             )
+            webhook_row_id = (await cur.fetchone())[0]
             await conn.commit()
     
     # Process webhook in background (after returning response to Shopify)
@@ -362,7 +368,8 @@ async def webhook_ingest(
         process_webhook,
         x_shopify_shop_domain,
         x_shopify_topic,
-        payload
+        payload,
+        webhook_row_id
     )
     
     return {"status": "ok"}
