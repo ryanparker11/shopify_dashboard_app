@@ -192,7 +192,52 @@ async def process_order_webhook(cur, shop_id: int, payload: dict):
             payload.get("updated_at")
         )
     )
+    # ==========================================
+    # NEW CODE: Process line items
+    # ==========================================
+    line_items = payload.get("line_items", [])
     
+    # First, delete existing line items for this order (in case of update)
+    await cur.execute(
+        """
+        DELETE FROM shopify.order_line_items 
+        WHERE shop_id = %s AND order_id = %s;
+        """,
+        (shop_id, order_id)
+    )
+    
+    # Insert each line item
+    for idx, item in enumerate(line_items):
+        await cur.execute(
+            """
+            INSERT INTO shopify.order_line_items (
+                shop_id,
+                order_id,
+                line_number,
+                product_id,
+                variant_id,
+                title,
+                quantity,
+                price,
+                total_discount,
+                line_total
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            );
+            """,
+            (
+                shop_id,
+                order_id,
+                idx + 1,  # line_number
+                item.get("product_id"),
+                item.get("variant_id"),
+                item.get("title") or item.get("name"),
+                item.get("quantity"),
+                item.get("price"),
+                item.get("total_discount", "0"),
+                float(item.get("price", 0)) * int(item.get("quantity", 0)) if item.get("price") and item.get("quantity") else None
+            )
+        )
     print(f"✅ Processed order {payload.get('name')} - ${payload.get('total_price')} from {email}")
 
 
