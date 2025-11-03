@@ -33,7 +33,7 @@ def verify_webhook(body: bytes, hmac_header: str, secret: str) -> bool:
     return hmac.compare_digest(computed_hmac, hmac_header)
 
 def verify_any(body: bytes, header: str, secrets: list[str]) -> bool:
-#Try multiple possible secrets until one verifies.
+    #Try multiple possible secrets until one verifies.
     for s in secrets:
         if s and verify_webhook(body, header, s):
             return True
@@ -192,8 +192,10 @@ async def process_order_webhook(cur, shop_id: int, payload: dict):
             payload.get("updated_at")
         )
     )
+    
     # ==========================================
-    # NEW CODE: Process line items
+    # UPDATED: Process line items with LEFT JOIN approach
+    # This prevents foreign key violations when products don't exist yet
     # ==========================================
     line_items = payload.get("line_items", [])
     
@@ -206,7 +208,7 @@ async def process_order_webhook(cur, shop_id: int, payload: dict):
         (shop_id, order_id)
     )
     
-    # Insert each line item
+    # CHANGED: Insert with LEFT JOIN to handle missing products gracefully
     for idx, item in enumerate(line_items):
         await cur.execute(
             """
@@ -220,29 +222,42 @@ async def process_order_webhook(cur, shop_id: int, payload: dict):
                 quantity,
                 price,
                 total_discount
-            ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s
-            );
+            )
+            SELECT 
+                %s, %s, %s,
+                p.product_id,   -- NULL if product doesn't exist
+                pv.variant_id,  -- NULL if variant doesn't exist
+                %s, %s, %s, %s
+            FROM (SELECT 1) AS dummy
+            LEFT JOIN shopify.products p 
+                ON p.shop_id = %s AND p.product_id = %s
+            LEFT JOIN shopify.product_variants pv 
+                ON pv.shop_id = %s AND pv.variant_id = %s;
             """,
             (
                 shop_id,
                 order_id,
                 idx + 1,  # line_number
-                item.get("product_id"),
-                item.get("variant_id"),
                 item.get("title") or item.get("name"),
                 item.get("quantity"),
                 item.get("price"),
-                item.get("total_discount", "0")
+                item.get("total_discount", "0"),
+                shop_id, item.get("product_id"),
+                shop_id, item.get("variant_id")
             )
         )
+    
     print(f"✅ Processed order {payload.get('name')} - ${payload.get('total_price')} from {email}")
 
 
+# ============================================================================
+# UPDATED: process_product_webhook - Now handles variants with shop_id
+# ============================================================================
 async def process_product_webhook(cur, shop_id: int, payload: dict):
     """Process products/create and products/update webhooks."""
     product_id = payload.get("id")
     
+    # Insert/update product
     await cur.execute(
         """
         INSERT INTO shopify.products (
@@ -277,14 +292,107 @@ async def process_product_webhook(cur, shop_id: int, payload: dict):
             payload.get("title"),
             payload.get("handle"),
             payload.get("vendor"),
-            payload.get("product_type"),
+            payload.get("product_type") or payload.get("productType"),  # Handle both formats
             payload.get("tags"),
             payload.get("status"),
-            payload.get("created_at"),
-            payload.get("updated_at"),
+            payload.get("created_at") or payload.get("createdAt"),
+            payload.get("updated_at") or payload.get("updatedAt"),
             json.dumps(payload)
         )
     )
+    
+    # NEW: Process variants
+    variants = payload.get("variants", [])
+    
+    for variant in variants:
+        variant_id = variant.get("id")
+        
+        if not variant_id:
+            continue
+        
+        await cur.execute(
+            """
+            INSERT INTO shopify.product_variants (
+                shop_id,
+                variant_id,
+                product_id,
+                title,
+                price,
+                sku,
+                position,
+                inventory_policy,
+                compare_at_price,
+                fulfillment_service,
+                inventory_management,
+                option1,
+                option2,
+                option3,
+                created_at,
+                updated_at,
+                taxable,
+                barcode,
+                weight,
+                weight_unit,
+                inventory_item_id,
+                inventory_quantity,
+                old_inventory_quantity,
+                requires_shipping
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            )
+            ON CONFLICT (shop_id, variant_id)
+            DO UPDATE SET
+                product_id = EXCLUDED.product_id,
+                title = EXCLUDED.title,
+                price = EXCLUDED.price,
+                sku = EXCLUDED.sku,
+                position = EXCLUDED.position,
+                inventory_policy = EXCLUDED.inventory_policy,
+                compare_at_price = EXCLUDED.compare_at_price,
+                fulfillment_service = EXCLUDED.fulfillment_service,
+                inventory_management = EXCLUDED.inventory_management,
+                option1 = EXCLUDED.option1,
+                option2 = EXCLUDED.option2,
+                option3 = EXCLUDED.option3,
+                updated_at = EXCLUDED.updated_at,
+                taxable = EXCLUDED.taxable,
+                barcode = EXCLUDED.barcode,
+                weight = EXCLUDED.weight,
+                weight_unit = EXCLUDED.weight_unit,
+                inventory_item_id = EXCLUDED.inventory_item_id,
+                inventory_quantity = EXCLUDED.inventory_quantity,
+                old_inventory_quantity = EXCLUDED.old_inventory_quantity,
+                requires_shipping = EXCLUDED.requires_shipping;
+            """,
+            (
+                shop_id,  # NEW: shop_id included
+                variant_id,
+                product_id,
+                variant.get("title"),
+                variant.get("price"),
+                variant.get("sku"),
+                variant.get("position"),
+                variant.get("inventory_policy") or variant.get("inventoryPolicy"),
+                variant.get("compare_at_price") or variant.get("compareAtPrice"),
+                variant.get("fulfillment_service") or variant.get("fulfillmentService"),
+                variant.get("inventory_management") or variant.get("inventoryManagement"),
+                variant.get("option1"),
+                variant.get("option2"),
+                variant.get("option3"),
+                variant.get("created_at") or variant.get("createdAt"),
+                variant.get("updated_at") or variant.get("updatedAt"),
+                variant.get("taxable"),
+                variant.get("barcode"),
+                variant.get("weight"),
+                variant.get("weight_unit") or variant.get("weightUnit"),
+                variant.get("inventory_item_id") or variant.get("inventoryItemId"),
+                variant.get("inventory_quantity") or variant.get("inventoryQuantity"),
+                variant.get("old_inventory_quantity") or variant.get("oldInventoryQuantity"),
+                variant.get("requires_shipping") or variant.get("requiresShipping")
+            )
+        )
+    
+    print(f"✅ Processed product {payload.get('title')} with {len(variants)} variants")
 
 
 async def process_customer_webhook(cur, shop_id: int, payload: dict):
@@ -534,7 +642,3 @@ async def webhook_status(shop_domain: Optional[str] = None, limit: int = 100):
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
-
-
-
-
