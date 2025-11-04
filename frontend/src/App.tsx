@@ -1,5 +1,5 @@
 // App.tsx
-import { AppProvider, Card, Banner, ProgressBar, Text, BlockStack, Layout, Button } from '@shopify/polaris'; // UPDATED: Added Button
+import { AppProvider, Card, Banner, ProgressBar, Text, BlockStack, Layout, Button, InlineStack } from '@shopify/polaris';
 import enTranslations from '@shopify/polaris/locales/en.json';
 import '@shopify/polaris/build/esm/styles.css';
 import ShopifyEmbedGate from './components/ShopifyEmbedGate';
@@ -13,9 +13,12 @@ interface SyncStatus {
   error: string | null;
 }
 
+// Chart object returned by /api/charts/{shop}
 interface ChartData {
+  key?: string;
   data: Plotly.Data[];
-  layout: Partial<Plotly.Layout>;
+  layout: Partial<Plotly.Layout & { title?: string | { text?: string } }>;
+  export_url?: string; // e.g. "/charts/{shop}/export/{key}"
 }
 
 export default function App() {
@@ -24,13 +27,16 @@ export default function App() {
   const [chartData, setChartData] = useState<ChartData[]>([]);
   const [totalOrders, setTotalOrders] = useState<number | null>(null);
   const [shop, setShop] = useState<string | null>(null);
-  const [downloadingTemplate, setDownloadingTemplate] = useState(false); // NEW: Loading state for template download
+  const [downloadingTemplate, setDownloadingTemplate] = useState(false);
+
   const API_URL = import.meta.env.VITE_API_URL || 'https://api.lodestaranalytics.io';
 
   // --- Helpers ---
   async function fetchOrdersSummary(shopDomain: string) {
     try {
-      const res = await fetch(`${API_URL}/api/orders/summary?shop_domain=${encodeURIComponent(shopDomain)}`);
+      const res = await fetch(`${API_URL}/api/orders/summary?shop_domain=${encodeURIComponent(shopDomain)}`, {
+        credentials: 'include',
+      });
       if (!res.ok) return;
       const data = await res.json();
       setTotalOrders(data.total_orders ?? null);
@@ -41,7 +47,10 @@ export default function App() {
 
   const fetchChartData = async (shopName: string) => {
     try {
-      const response = await fetch(`${API_URL}/api/charts/${shopName}`);
+      const response = await fetch(`${API_URL}/api/charts/${encodeURIComponent(shopName)}`, {
+        credentials: 'include',
+      });
+      if (!response.ok) throw new Error(`Charts fetch failed: ${response.status}`);
       const data = await response.json();
       setChartData(data.charts || []);
     } catch (error) {
@@ -49,35 +58,68 @@ export default function App() {
     }
   };
 
+  // Resolve backend-provided export_url into a fully-qualified URL
+  const resolveExportUrl = (exportUrl?: string) => {
+    if (!exportUrl) return null;
+    // If backend mounts this router at /api, prepend /api for relative paths
+    if (exportUrl.startsWith('/charts')) return `${API_URL}/api${exportUrl}`;
+    if (exportUrl.startsWith('/api/')) return `${API_URL}${exportUrl}`;
+    if (exportUrl.startsWith('http')) return exportUrl;
+    // Fallback: treat as relative to API /api
+    return `${API_URL}/api/${exportUrl.replace(/^\/+/, '')}`;
+  };
+
+  // Download a single chart's dataset as Excel
+  const downloadChart = async (chart: ChartData) => {
+    try {
+      const url = resolveExportUrl(chart.export_url);
+      if (!url) return;
+
+      const res = await fetch(url, { credentials: 'include' });
+      if (!res.ok) throw new Error(`Export failed: ${res.status}`);
+      const blob = await res.blob();
+
+      const filename =
+        `${chart.key || 'chart'}_${new Date().toISOString().slice(0, 10)}.xlsx`.replace(/\s+/g, '_');
+
+      const objectUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = objectUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(objectUrl);
+    } catch (err) {
+      console.error('Download error:', err);
+      alert('Failed to download chart data. Please try again.');
+    }
+  };
+
   // NEW: Download COGS template function
   const downloadCogsTemplate = async () => {
     if (!shop) return;
-    
     setDownloadingTemplate(true);
     try {
       const response = await fetch(
-        `${API_URL}/api/cogs/download-template?shop_domain=${encodeURIComponent(shop)}`
+        `${API_URL}/api/cogs/download-template?shop_domain=${encodeURIComponent(shop)}`,
+        { credentials: 'include' }
       );
 
       if (!response.ok) {
-        const errorData = await response.json();
+        const errorData = await response.json().catch(() => ({}));
         throw new Error(errorData.detail || 'Failed to download template');
       }
 
-      // Get the blob from response
       const blob = await response.blob();
-
-      // Create download link
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
       a.download = 'cogs_upload_template.xlsx';
       document.body.appendChild(a);
       a.click();
-
-      // Cleanup
+      a.remove();
       window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
     } catch (err) {
       console.error('Error downloading template:', err);
       alert('Failed to download COGS template. Please try again.');
@@ -99,7 +141,9 @@ export default function App() {
 
     const checkSyncStatus = async () => {
       try {
-        const response = await fetch(`${API_URL}/auth/sync-status/${shopParam}`);
+        const response = await fetch(`${API_URL}/auth/sync-status/${encodeURIComponent(shopParam)}`, {
+          credentials: 'include',
+        });
         const data: SyncStatus = await response.json();
 
         setSyncStatus(data);
@@ -122,7 +166,6 @@ export default function App() {
     };
 
     checkSyncStatus();
-    // run once on mount
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -132,9 +175,7 @@ export default function App() {
 
     const refresh = () => fetchOrdersSummary(shop);
 
-    // initial tick
-    refresh();
-
+    refresh(); // initial
     const id = setInterval(refresh, 15000);
     const onFocus = () => refresh();
 
@@ -159,7 +200,8 @@ export default function App() {
         );
 
       case 'in_progress': {
-        const progress = syncStatus.orders_synced > 0 ? Math.min((syncStatus.orders_synced / 10000) * 100, 95) : 0;
+        const progress =
+          syncStatus.orders_synced > 0 ? Math.min((syncStatus.orders_synced / 10000) * 100, 95) : 0;
         return (
           <Banner tone="info">
             <BlockStack gap="300">
@@ -188,7 +230,9 @@ export default function App() {
         return (
           <Banner tone="critical">
             <BlockStack gap="200">
-              <Text as="p" fontWeight="semibold">Failed to import order history</Text>
+              <Text as="p" fontWeight="semibold">
+                Failed to import order history
+              </Text>
               {syncStatus.error && <Text as="p" variant="bodySm">Error: {syncStatus.error}</Text>}
               <Text as="p" variant="bodySm">
                 Don't worry - new orders will still be tracked. Contact support if this persists.
@@ -209,24 +253,35 @@ export default function App() {
       <div style={{ marginTop: '20px' }}>
         <Layout>
           {chartData.map((chart, index) => {
-            const titleText = typeof chart.layout.title === 'string'
-              ? chart.layout.title
-              : chart.layout.title?.text || '';
+            const titleText =
+              typeof chart.layout.title === 'string'
+                ? chart.layout.title
+                : chart.layout.title?.text || '';
 
             return (
-              <Layout.Section key={index} variant="oneHalf">
+              <Layout.Section key={chart.key || index} variant="oneHalf">
                 <Card>
-                  <BlockStack gap="400">
+                  <BlockStack gap="300">
                     <div style={{ padding: '16px 16px 0 16px' }}>
-                      <Text as="h2" variant="headingMd">{titleText}</Text>
+                      <InlineStack align="space-between" blockAlign="center">
+                        <Text as="h2" variant="headingMd">
+                          {titleText}
+                        </Text>
+                        {chart.export_url && (
+                          <Button size="slim" onClick={() => downloadChart(chart)}>
+                            Download
+                          </Button>
+                        )}
+                      </InlineStack>
                     </div>
+
                     <Plot
                       data={chart.data}
                       layout={{
                         ...chart.layout,
-                        title: undefined,
+                        title: undefined, // we render our own title row
                         autosize: true,
-                        margin: { t: 20, r: 40, b: 60, l: 60 }
+                        margin: { t: 20, r: 40, b: 60, l: 60 },
                       }}
                       config={{ responsive: true, displayModeBar: false }}
                       style={{ width: '100%', height: '400px' }}
@@ -262,7 +317,7 @@ export default function App() {
                   </Text>
                 )}
 
-                {/* NEW: COGS Template Download Section */}
+                {/* COGS Template Download */}
                 {shop && syncStatus?.status === 'completed' && (
                   <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid #e1e3e5' }}>
                     <BlockStack gap="300">
@@ -273,10 +328,7 @@ export default function App() {
                         Download a pre-filled template with all your products. Simply add COGS values and upload.
                       </Text>
                       <div>
-                        <Button
-                          onClick={downloadCogsTemplate}
-                          loading={downloadingTemplate}
-                        >
+                        <Button onClick={downloadCogsTemplate} loading={downloadingTemplate}>
                           {downloadingTemplate ? 'Generating Template...' : '📥 Download COGS Template'}
                         </Button>
                       </div>
