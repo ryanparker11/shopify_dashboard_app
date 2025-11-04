@@ -84,11 +84,18 @@ async def get_charts(shop_domain: str) -> Dict[str, List[Dict[str, Any]]]:
                         }
                     })
             
-            # Chart 2: Top Products (Pie Chart)
-            products_sql = """
+            # Chart 2: Top 5 Products (% of Total Units) with "Other"
+            total_qty_sql = """
+            SELECT COALESCE(SUM(li.quantity * li.price), 0)::bigint AS total_qty
+            FROM shopify.order_line_items li
+            JOIN shopify.orders o ON li.order_id = o.order_id
+            WHERE o.shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s);
+            """
+
+            top5_sql = """
             SELECT 
-                li.title as product_name,
-                SUM(li.quantity)::int as total_quantity
+                li.title AS product_name,
+                SUM(li.quantity * li.price)::bigint AS total_quantity
             FROM shopify.order_line_items li
             JOIN shopify.orders o ON li.order_id = o.order_id
             WHERE o.shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
@@ -96,22 +103,40 @@ async def get_charts(shop_domain: str) -> Dict[str, List[Dict[str, Any]]]:
             ORDER BY total_quantity DESC
             LIMIT 5;
             """
+
             async with conn.cursor() as cur:
-                await cur.execute(products_sql, (shop_domain,))
-                product_data = await cur.fetchall()
-                
-                if product_data:
+                # Get total quantity across ALL products
+                await cur.execute(total_qty_sql, (shop_domain,))
+                total_row = await cur.fetchone()
+                total_qty = int(total_row[0]) if total_row and total_row[0] is not None else 0
+
+                # Get top 5 products by quantity
+                await cur.execute(top5_sql, (shop_domain,))
+                top5_rows = await cur.fetchall()
+
+                if total_qty > 0 and top5_rows:
+                    labels = [r[0] for r in top5_rows]
+                    values = [int(r[1]) for r in top5_rows]
+
+                    other = max(total_qty - sum(values), 0)
+                    if other > 0:
+                        labels.append("Other")
+                        values.append(other)
+
                     charts.append({
                         "data": [{
-                            "values": [row[1] for row in product_data],
-                            "labels": [row[0] for row in product_data],
+                            "values": values,              # raw counts incl. "Other"
+                            "labels": labels,
                             "type": "pie",
-                            "hole": 0.3
+                            "hole": 0.3,
+                            "textinfo": "label+percent",  # show % of TOTAL (since "Other" is included)
+                            "insidetextorientation": "auto"
                         }],
                         "layout": {
-                            "title": "Top 5 Products by Quantity Sold"
+                            "title": "Top 5 Products (% of Total Units)"
                         }
                     })
+
             
             # Chart 3: Daily Orders (Line Chart) - Last 30 days
             daily_orders_sql = """
