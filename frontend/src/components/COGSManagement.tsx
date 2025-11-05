@@ -48,7 +48,10 @@ export function COGSManagement({ shopDomain, apiUrl = '' }: COGSManagementProps)
     const fetchProfitMetrics = useCallback(async () => {
         try {
             const response = await fetch(
-                `${apiUrl}/api/cogs/profit-analysis?shop_domain=${encodeURIComponent(shopDomain)}&days=30`
+                `${apiUrl}/api/cogs/profit-analysis?shop_domain=${encodeURIComponent(shopDomain)}&days=30`,
+                {
+                    credentials: 'include',
+                }
             );
             if (response.ok) {
                 const data = await response.json();
@@ -67,7 +70,10 @@ export function COGSManagement({ shopDomain, apiUrl = '' }: COGSManagementProps)
         setDownloadingTemplate(true);
         try {
             const response = await fetch(
-                `${apiUrl}/api/cogs/download-template?shop_domain=${encodeURIComponent(shopDomain)}`
+                `${apiUrl}/api/cogs/download-template?shop_domain=${encodeURIComponent(shopDomain)}`,
+                {
+                    credentials: 'include',
+                }
             );
 
             if (!response.ok) {
@@ -114,6 +120,7 @@ export function COGSManagement({ shopDomain, apiUrl = '' }: COGSManagementProps)
                 {
                     method: 'POST',
                     body: formData,
+                    credentials: 'include',
                 }
             );
 
