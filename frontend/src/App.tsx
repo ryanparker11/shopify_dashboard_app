@@ -3,6 +3,7 @@ import { AppProvider, Card, Banner, ProgressBar, Text, BlockStack, Layout, Butto
 import enTranslations from '@shopify/polaris/locales/en.json';
 import '@shopify/polaris/build/esm/styles.css';
 import ShopifyEmbedGate from './components/ShopifyEmbedGate';
+import { COGSManagement } from './components/COGSManagement'; // NEW: Import COGS component
 import { useEffect, useState } from 'react';
 import Plot from 'react-plotly.js';
 
@@ -27,7 +28,6 @@ export default function App() {
   const [chartData, setChartData] = useState<ChartData[]>([]);
   const [totalOrders, setTotalOrders] = useState<number | null>(null);
   const [shop, setShop] = useState<string | null>(null);
-  const [downloadingTemplate, setDownloadingTemplate] = useState(false);
 
   const API_URL = import.meta.env.VITE_API_URL || 'https://api.lodestaranalytics.io';
 
@@ -93,38 +93,6 @@ export default function App() {
     } catch (err) {
       console.error('Download error:', err);
       alert('Failed to download chart data. Please try again.');
-    }
-  };
-
-  // NEW: Download COGS template function
-  const downloadCogsTemplate = async () => {
-    if (!shop) return;
-    setDownloadingTemplate(true);
-    try {
-      const response = await fetch(
-        `${API_URL}/api/cogs/download-template?shop_domain=${encodeURIComponent(shop)}`,
-        { credentials: 'include' }
-      );
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.detail || 'Failed to download template');
-      }
-
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'cogs_upload_template.xlsx';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
-    } catch (err) {
-      console.error('Error downloading template:', err);
-      alert('Failed to download COGS template. Please try again.');
-    } finally {
-      setDownloadingTemplate(false);
     }
   };
 
@@ -316,27 +284,15 @@ export default function App() {
                     Your store has {totalOrders.toLocaleString()} orders ready to analyze.
                   </Text>
                 )}
-
-                {/* COGS Template Download */}
-                {shop && syncStatus?.status === 'completed' && (
-                  <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid #e1e3e5' }}>
-                    <BlockStack gap="300">
-                      <Text as="h2" variant="headingMd">
-                        COGS Management
-                      </Text>
-                      <Text as="p" tone="subdued">
-                        Download a pre-filled template with all your products. Simply add COGS values and upload.
-                      </Text>
-                      <div>
-                        <Button onClick={downloadCogsTemplate} loading={downloadingTemplate}>
-                          {downloadingTemplate ? 'Generating Template...' : '📥 Download COGS Template'}
-                        </Button>
-                      </div>
-                    </BlockStack>
-                  </div>
-                )}
               </BlockStack>
             </Card>
+
+            {/* UPDATED: Replace simple COGS button with full COGSManagement component */}
+            {shop && syncStatus?.status === 'completed' && (
+              <div style={{ marginTop: '20px' }}>
+                <COGSManagement shopDomain={shop} apiUrl={API_URL} />
+              </div>
+            )}
 
             {renderCharts()}
           </div>
