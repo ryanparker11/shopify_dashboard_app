@@ -1,10 +1,20 @@
 // App.tsx
-import { AppProvider, Card, Banner, ProgressBar, Text, BlockStack, Layout, Button, InlineStack } from '@shopify/polaris';
+import {
+  AppProvider,
+  Card,
+  Banner,
+  ProgressBar,
+  Text,
+  BlockStack,
+  Layout,
+  Button,
+  InlineStack,
+} from '@shopify/polaris';
 import enTranslations from '@shopify/polaris/locales/en.json';
 import '@shopify/polaris/build/esm/styles.css';
 import ShopifyEmbedGate from './components/ShopifyEmbedGate';
-import { COGSManagement } from './components/COGSManagement'; // NEW: Import COGS component
-import { useEffect, useState } from 'react';
+import { COGSManagement } from './components/COGSManagement';
+import { useEffect, useRef, useState } from 'react';
 import Plot from 'react-plotly.js';
 
 interface SyncStatus {
@@ -14,7 +24,6 @@ interface SyncStatus {
   error: string | null;
 }
 
-// Chart object returned by /api/charts/{shop}
 interface ChartData {
   key?: string;
   data: Plotly.Data[];
@@ -29,14 +38,19 @@ export default function App() {
   const [totalOrders, setTotalOrders] = useState<number | null>(null);
   const [shop, setShop] = useState<string | null>(null);
 
+  // NEW: control the banner independently
+  const [showBanner, setShowBanner] = useState(false);
+  const prevStatusRef = useRef<SyncStatus['status'] | null>(null);
+
   const API_URL = import.meta.env.VITE_API_URL || 'https://api.lodestaranalytics.io';
 
   // --- Helpers ---
   async function fetchOrdersSummary(shopDomain: string) {
     try {
-      const res = await fetch(`${API_URL}/api/orders/summary?shop_domain=${encodeURIComponent(shopDomain)}`, {
-        credentials: 'include',
-      });
+      const res = await fetch(
+        `${API_URL}/api/orders/summary?shop_domain=${encodeURIComponent(shopDomain)}`,
+        { credentials: 'include' },
+      );
       if (!res.ok) return;
       const data = await res.json();
       setTotalOrders(data.total_orders ?? null);
@@ -61,11 +75,9 @@ export default function App() {
   // Resolve backend-provided export_url into a fully-qualified URL
   const resolveExportUrl = (exportUrl?: string) => {
     if (!exportUrl) return null;
-    // If backend mounts this router at /api, prepend /api for relative paths
     if (exportUrl.startsWith('/charts')) return `${API_URL}/api${exportUrl}`;
     if (exportUrl.startsWith('/api/')) return `${API_URL}${exportUrl}`;
     if (exportUrl.startsWith('http')) return exportUrl;
-    // Fallback: treat as relative to API /api
     return `${API_URL}/api/${exportUrl.replace(/^\/+/, '')}`;
   };
 
@@ -79,8 +91,10 @@ export default function App() {
       if (!res.ok) throw new Error(`Export failed: ${res.status}`);
       const blob = await res.blob();
 
-      const filename =
-        `${chart.key || 'chart'}_${new Date().toISOString().slice(0, 10)}.xlsx`.replace(/\s+/g, '_');
+      const filename = `${chart.key || 'chart'}_${new Date().toISOString().slice(0, 10)}.xlsx`.replace(
+        /\s+/g,
+        '_',
+      );
 
       const objectUrl = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -116,6 +130,25 @@ export default function App() {
 
         setSyncStatus(data);
         setIsLoading(false);
+
+        // Banner visibility rules:
+        // - show while pending/in_progress
+        // - show exactly once when transitioning to completed/failed in THIS session
+        const was = prevStatusRef.current;
+        const now = data.status;
+
+        if (now === 'pending' || now === 'in_progress') {
+          setShowBanner(true);
+        } else if (
+          (was === 'pending' || was === 'in_progress') &&
+          (now === 'completed' || now === 'failed')
+        ) {
+          setShowBanner(true); // one-time success/failure banner after initial sync ends
+        } else {
+          // If we loaded already completed/failed/not_found, keep banner hidden
+          setShowBanner(false);
+        }
+        prevStatusRef.current = now;
 
         // When sync completes, load charts and live count
         if (data.status === 'completed') {
@@ -155,7 +188,7 @@ export default function App() {
   }, [shop]);
 
   const renderSyncBanner = () => {
-    if (isLoading || !syncStatus) return null;
+    if (isLoading || !syncStatus || !showBanner) return null;
 
     switch (syncStatus.status) {
       case 'pending':
@@ -187,7 +220,7 @@ export default function App() {
 
       case 'completed':
         return (
-          <Banner tone="success" onDismiss={() => setSyncStatus(null)}>
+          <Banner tone="success" onDismiss={() => setShowBanner(false)}>
             <Text as="p">
               ✅ Successfully imported {syncStatus.orders_synced.toLocaleString()} orders from your store history!
             </Text>
@@ -196,7 +229,7 @@ export default function App() {
 
       case 'failed':
         return (
-          <Banner tone="critical">
+          <Banner tone="critical" onDismiss={() => setShowBanner(false)}>
             <BlockStack gap="200">
               <Text as="p" fontWeight="semibold">
                 Failed to import order history
@@ -271,7 +304,7 @@ export default function App() {
         <div style={{ padding: '20px' }}>
           {renderSyncBanner()}
 
-          <div style={{ marginTop: '300px' }}>
+          <div style={{ marginTop: '30px' }}>
             <Card>
               <BlockStack gap="400">
                 <Text as="h1" variant="headingLg">
@@ -287,7 +320,7 @@ export default function App() {
               </BlockStack>
             </Card>
 
-            {/* UPDATED: Replace simple COGS button with full COGSManagement component */}
+            {/* COGS management appears only after initial sync completes */}
             {shop && syncStatus?.status === 'completed' && (
               <div style={{ marginTop: '20px' }}>
                 <COGSManagement shopDomain={shop} apiUrl={API_URL} />
