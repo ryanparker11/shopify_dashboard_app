@@ -170,20 +170,26 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // --- Effect: keep live order count fresh (interval + window focus) ---
+  // --- Effect: OPTIMIZED order count refresh with focus-based polling ---
   useEffect(() => {
     if (!shop) return;
 
     const refresh = () => fetchOrdersSummary(shop);
 
-    refresh(); // initial
-    const id = setInterval(refresh, 15000);
-    const onFocus = () => refresh();
+    // Initial fetch
+    refresh();
 
+    // Refresh when user returns to tab (saves ~90% of API calls)
+    const onFocus = () => refresh();
     window.addEventListener('focus', onFocus);
+
+    // Optional: Also refresh every 5 minutes for active users
+    // This is a much longer interval than before (was 15 seconds)
+    const intervalId = setInterval(refresh, 5 * 60 * 1000);
+
     return () => {
-      clearInterval(id);
       window.removeEventListener('focus', onFocus);
+      clearInterval(intervalId);
     };
   }, [shop]);
 
@@ -308,7 +314,7 @@ export default function App() {
             <Card>
               <BlockStack gap="400">
                 <Text as="h1" variant="headingLg">
-                  Welcome to Your Shopify App
+                  Welcome to Lodestar
                 </Text>
 
                 {/* Use LIVE count from DB instead of the initial sync count */}
