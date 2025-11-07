@@ -13,13 +13,15 @@ router = APIRouter()
 @router.get("/cogs/download-template")
 async def download_cogs_template(shop_domain: str):
     """
-    Generate and download COGS upload template with SKU, NAME, and VARIANT pre-filled.
+    Generate and download COGS upload template with VARIANT_ID, SKU, NAME, and VARIANT pre-filled.
     User only needs to fill in the COGS column.
+    Uses variant_id as the primary key for matching.
     """
     try:
         # Fetch products and variants from database
         sql = """
         SELECT 
+            pv.variant_id,
             pv.sku,
             p.title as product_name,
             pv.title as variant_title
@@ -43,7 +45,7 @@ async def download_cogs_template(shop_domain: str):
         sheet.title = "COGS Upload"
         
         # Header row styling
-        headers = ['SKU', 'NAME', 'VARIANT', 'COGS']
+        headers = ['VARIANT_ID', 'SKU', 'NAME', 'VARIANT', 'COGS']
         for col, header in enumerate(headers, start=1):
             cell = sheet.cell(row=1, column=col, value=header)
             cell.font = Font(bold=True, color='FFFFFF')
@@ -51,19 +53,21 @@ async def download_cogs_template(shop_domain: str):
             cell.alignment = Alignment(horizontal='center', vertical='center')
         
         # Set column widths
-        sheet.column_dimensions['A'].width = 20  # SKU
-        sheet.column_dimensions['B'].width = 40  # NAME
-        sheet.column_dimensions['C'].width = 30  # VARIANT
-        sheet.column_dimensions['D'].width = 15  # COGS
+        sheet.column_dimensions['A'].width = 15  # VARIANT_ID
+        sheet.column_dimensions['B'].width = 20  # SKU
+        sheet.column_dimensions['C'].width = 40  # NAME
+        sheet.column_dimensions['D'].width = 30  # VARIANT
+        sheet.column_dimensions['E'].width = 15  # COGS
         
         # Populate data rows
-        for row_idx, (sku, product_name, variant_title) in enumerate(products_data, start=2):
-            sheet.cell(row=row_idx, column=1, value=sku or '')
-            sheet.cell(row=row_idx, column=2, value=product_name or '')
-            sheet.cell(row=row_idx, column=3, value=variant_title if variant_title != 'Default Title' else 'Default')
+        for row_idx, (variant_id, sku, product_name, variant_title) in enumerate(products_data, start=2):
+            sheet.cell(row=row_idx, column=1, value=variant_id)
+            sheet.cell(row=row_idx, column=2, value=sku or '')
+            sheet.cell(row=row_idx, column=3, value=product_name or '')
+            sheet.cell(row=row_idx, column=4, value=variant_title if variant_title != 'Default Title' else 'Default')
             
             # COGS column - yellow highlight for user input
-            cogs_cell = sheet.cell(row=row_idx, column=4)
+            cogs_cell = sheet.cell(row=row_idx, column=5)
             cogs_cell.fill = PatternFill('solid', start_color='FFFF00')
         
         # Freeze header row
@@ -126,6 +130,7 @@ async def cogs_summary(shop_domain: str):
 async def upload_cogs_template(shop_domain: str, file: UploadFile = File(...)):
     """
     Upload completed COGS template and update product costs.
+    Uses VARIANT_ID as the primary matching key (more reliable than SKU).
     This will overwrite existing COGS data.
     """
     try:
@@ -138,15 +143,16 @@ async def upload_cogs_template(shop_domain: str, file: UploadFile = File(...)):
         df = pd.read_excel(io.BytesIO(contents))
         
         # Validate required columns
-        required_columns = ['SKU', 'NAME', 'VARIANT', 'COGS']
+        required_columns = ['VARIANT_ID', 'COGS']
         missing_columns = [col for col in required_columns if col not in df.columns]
         if missing_columns:
             raise HTTPException(400, f"Missing required columns: {', '.join(missing_columns)}")
         
         # Clean the data
-        df = df.dropna(subset=['SKU', 'COGS'])  # Remove rows without SKU or COGS
-        df['COGS'] = pd.to_numeric(df['COGS'], errors='coerce')  # Convert COGS to numeric
-        df = df.dropna(subset=['COGS'])  # Remove rows where COGS couldn't be converted
+        df = df.dropna(subset=['VARIANT_ID', 'COGS'])  # Remove rows without VARIANT_ID or COGS
+        df['VARIANT_ID'] = pd.to_numeric(df['VARIANT_ID'], errors='coerce', downcast='integer')
+        df['COGS'] = pd.to_numeric(df['COGS'], errors='coerce')
+        df = df.dropna(subset=['VARIANT_ID', 'COGS'])  # Remove rows where conversion failed
         
         if len(df) == 0:
             raise HTTPException(400, "No valid COGS data found in the file")
@@ -163,7 +169,7 @@ async def upload_cogs_template(shop_domain: str, file: UploadFile = File(...)):
                     raise HTTPException(404, "Shop not found")
                 shop_id = shop_row[0]
         
-        # Update COGS for each SKU
+        # Update COGS for each variant_id
         updated_count = 0
         skipped_count = 0
         errors = []
@@ -171,11 +177,11 @@ async def upload_cogs_template(shop_domain: str, file: UploadFile = File(...)):
         async with get_conn() as conn:
             async with conn.cursor() as cur:
                 for _, row in df.iterrows():
-                    sku = str(row['SKU']).strip()
+                    variant_id = int(row['VARIANT_ID'])
                     cogs = float(row['COGS'])
                     
                     try:
-                        # Update product variant cost
+                        # Update product variant cost using variant_id
                         update_sql = """
                         UPDATE shopify.product_variants pv
                         SET cost = %s,
@@ -183,19 +189,19 @@ async def upload_cogs_template(shop_domain: str, file: UploadFile = File(...)):
                         FROM shopify.products p
                         WHERE pv.product_id = p.product_id
                           AND p.shop_id = %s
-                          AND pv.sku = %s
+                          AND pv.variant_id = %s
                         """
-                        await cur.execute(update_sql, (cogs, shop_id, sku))
+                        await cur.execute(update_sql, (cogs, shop_id, variant_id))
                         
                         if cur.rowcount > 0:
                             updated_count += 1
                         else:
                             skipped_count += 1
-                            errors.append(f"SKU not found: {sku}")
+                            errors.append(f"Variant ID not found: {variant_id}")
                     
                     except Exception as e:
                         skipped_count += 1
-                        errors.append(f"Error updating SKU {sku}: {str(e)}")
+                        errors.append(f"Error updating Variant ID {variant_id}: {str(e)}")
                 
                 # Commit the transaction
                 await conn.commit()
@@ -220,6 +226,7 @@ async def profit_analysis(shop_domain: str, days: int = 30):
     """
     Calculate profit metrics based on orders and COGS data.
     Returns revenue, COGS, profit, and margin for the specified period.
+    Filters out line items with NULL variant_id to ensure accurate COGS matching.
     """
     try:
         sql = """
@@ -237,8 +244,9 @@ async def profit_analysis(shop_domain: str, days: int = 30):
             JOIN shopify.orders o ON li.order_id = o.order_id
             LEFT JOIN shopify.product_variants pv ON li.variant_id = pv.variant_id
             WHERE o.shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
-              AND o.created_at >= NOW() - INTERVAL '%s days'
+              AND o.created_at >= NOW() - INTERVAL '1 day' * %s
               AND o.financial_status IN ('paid', 'partially_paid')
+              AND li.variant_id IS NOT NULL
         )
         SELECT 
             COALESCE(SUM(line_revenue), 0)::numeric as total_revenue,
@@ -285,6 +293,7 @@ async def profit_analysis(shop_domain: str, days: int = 30):
 async def profit_by_product(shop_domain: str, days: int = 30, limit: int = 10):
     """
     Get top products by profit with COGS breakdown.
+    Filters out line items with NULL variant_id to ensure accurate COGS matching.
     """
     try:
         sql = """
@@ -304,8 +313,9 @@ async def profit_by_product(shop_domain: str, days: int = 30, limit: int = 10):
         JOIN shopify.products p ON li.product_id = p.product_id
         LEFT JOIN shopify.product_variants pv ON li.variant_id = pv.variant_id
         WHERE o.shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
-          AND o.created_at >= NOW() - INTERVAL '%s days'
+          AND o.created_at >= NOW() - INTERVAL '1 day' * %s
           AND o.financial_status IN ('paid', 'partially_paid')
+          AND li.variant_id IS NOT NULL
         GROUP BY p.product_id, p.title
         ORDER BY profit DESC
         LIMIT %s;
