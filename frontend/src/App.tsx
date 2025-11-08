@@ -322,7 +322,7 @@ export default function App() {
                             </ProLock>
 
                             {!isPro && shop && (
-                              <BillingButton shopDomain={shop} planName="Lodestar Pro" price={25} />
+                              <BillingButton shopDomain={shop} planName="Lodestar Pro" price={25} apiUrl={API_URL} />
                             )}
                           </InlineStack>
                         )}
@@ -379,7 +379,7 @@ export default function App() {
                       <Text as="p">
                         Excel downloads are part of the <b>Pro</b> plan. Upgrade to unlock one-click exports.
                       </Text>
-                      <BillingButton shopDomain={shop} planName="Lodestar Pro" price={25} />
+                      <BillingButton shopDomain={shop} planName="Lodestar Pro" price={25} apiUrl ={API_URL}/>
                     </InlineStack>
                   </Banner>
                 )}
