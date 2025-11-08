@@ -34,7 +34,7 @@ app.include_router(shopify_auth)
 
 
 # === BILLING ADDITIONS START: include router ==================================
-from api.billing import router as billing_router
+from commerce_app.api.billing import router as billing_router
 app.include_router(billing_router)
 # === BILLING ADDITIONS END: include router ====================================
 
