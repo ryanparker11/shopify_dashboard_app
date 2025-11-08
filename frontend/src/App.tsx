@@ -17,6 +17,11 @@ import { COGSManagement } from './components/COGSManagement';
 import { useEffect, useRef, useState } from 'react';
 import Plot from 'react-plotly.js';
 
+// === BILLING ADDITIONS START: imports ========================================
+import BillingButton from './components/BillingButton';
+import ProLock from './components/ProLock';
+// === BILLING ADDITIONS END: imports ==========================================
+
 interface SyncStatus {
   status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'not_found';
   orders_synced: number;
@@ -43,6 +48,10 @@ export default function App() {
   const prevStatusRef = useRef<SyncStatus['status'] | null>(null);
 
   const API_URL = import.meta.env.VITE_API_URL || 'https://api.lodestaranalytics.io';
+
+  // === BILLING ADDITIONS START: state for Pro gating ==========================
+  const [isPro, setIsPro] = useState<boolean>(false);
+  // === BILLING ADDITIONS END: state for Pro gating ============================
 
   // --- Helpers ---
   async function fetchOrdersSummary(shopDomain: string) {
@@ -170,6 +179,24 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // === BILLING ADDITIONS START: fetch billing status ==========================
+  useEffect(() => {
+    if (!shop) return;
+    (async () => {
+      try {
+        const r = await fetch(`${API_URL}/api/billing/status?shop=${encodeURIComponent(shop)}`, {
+          credentials: 'include',
+        });
+        const j = await r.json();
+        setIsPro(!!j.isPro);
+      } catch (e) {
+        console.error('Billing status error:', e);
+        setIsPro(false);
+      }
+    })();
+  }, [shop, API_URL]);
+  // === BILLING ADDITIONS END: fetch billing status ============================
+
   // --- Effect: OPTIMIZED order count refresh with focus-based polling ---
   useEffect(() => {
     if (!shop) return;
@@ -184,7 +211,6 @@ export default function App() {
     window.addEventListener('focus', onFocus);
 
     // Optional: Also refresh every 5 minutes for active users
-    // This is a much longer interval than before (was 15 seconds)
     const intervalId = setInterval(refresh, 5 * 60 * 1000);
 
     return () => {
@@ -274,11 +300,33 @@ export default function App() {
                         <Text as="h2" variant="headingMd">
                           {titleText}
                         </Text>
+
+                        {/* === BILLING ADDITIONS START: Pro-locked Excel download === */}
                         {chart.export_url && (
-                          <Button size="slim" onClick={() => downloadChart(chart)}>
-                            Download
-                          </Button>
+                          <InlineStack gap="200">
+                            <ProLock
+                              locked={!isPro}
+                              tooltip="Excel downloads are a Pro feature — upgrade to unlock."
+                            >
+                              <span onClick={isPro ? () => downloadChart(chart) : undefined}>
+                                <Button
+                                  size="slim"
+                                  disabled={!isPro}
+                                  accessibilityLabel={
+                                    isPro ? 'Download Excel' : 'Pro feature — upgrade to unlock'
+                                  }
+                                >
+                                  Download
+                                </Button>
+                              </span>
+                            </ProLock>
+
+                            {!isPro && shop && (
+                              <BillingButton shopDomain={shop} planName="Lodestar Pro" price={25} />
+                            )}
+                          </InlineStack>
                         )}
+                        {/* === BILLING ADDITIONS END: Pro-locked Excel download ===== */}
                       </InlineStack>
                     </div>
 
@@ -323,6 +371,19 @@ export default function App() {
                     Your store has {totalOrders.toLocaleString()} orders ready to analyze.
                   </Text>
                 )}
+
+                {/* === BILLING ADDITIONS START: global upsell banner (optional) === */}
+                {!isPro && shop && (
+                  <Banner tone="info">
+                    <InlineStack gap="300" align="space-between" blockAlign="center">
+                      <Text as="p">
+                        Excel downloads are part of the <b>Pro</b> plan. Upgrade to unlock one-click exports.
+                      </Text>
+                      <BillingButton shopDomain={shop} planName="Lodestar Pro" price={25} />
+                    </InlineStack>
+                  </Banner>
+                )}
+                {/* === BILLING ADDITIONS END: global upsell banner (optional) ===== */}
               </BlockStack>
             </Card>
 
