@@ -33,11 +33,6 @@ app.include_router(shopify_auth)
 #app.include_router(analytics.router)
 
 
-# === BILLING ADDITIONS START: include router ==================================
-from commerce_app.api.billing import router as billing_router
-app.include_router(billing_router)
-# === BILLING ADDITIONS END: include router ====================================
-
 
 
 from fastapi.middleware.cors import CORSMiddleware
