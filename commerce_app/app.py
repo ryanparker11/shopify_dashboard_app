@@ -32,7 +32,7 @@ app.include_router(webhooks.router, prefix="/webhooks", tags=["webhooks"])
 app.include_router(health.router)
 app.include_router(shopify_auth)
 #app.include_router(analytics.router)
-app.include_router(gdpr_router, tags="gdpr")
+app.include_router(gdpr_router, tags=["gdpr"])
 
 
 
