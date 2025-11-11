@@ -1,6 +1,6 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-name = "lodestar-analytics"
+name = "lodestar"
 client_id = "68c92aac9cf4898ec8cdc8ce87814cf1"
 application_url = "https://app.lodestaranalytics.io"
 embedded = true
