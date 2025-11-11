@@ -535,54 +535,7 @@ async def webhook_ingest(
     return {"status": "ok"}
 
 
-@router.post("/test-ingest")
-async def test_webhook_ingest(
-    request: Request,
-    x_shopify_topic: str = Header(...),
-    x_shopify_shop_domain: str = Header(...)
-):
-    """Test endpoint without HMAC verification.
-    REMOVE IN PRODUCTION!"""
-    payload = await request.json()
-    
-    async with get_conn() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(
-                "SELECT shop_id FROM shopify.shops WHERE shop_domain = %s",
-                (x_shopify_shop_domain,)
-            )
-            shop_row = await cur.fetchone()
-            
-            if not shop_row:
-                return {"status": "accepted", "message": "Shop not registered"}
-            
-            shop_id = shop_row[0]
-            
-            # Store webhook as processed
-            await cur.execute(
-                """
-                INSERT INTO shopify.webhooks_received (shop_id, topic, payload_json, processed)
-                VALUES (%s, %s, %s::jsonb, true);
-                """,
-                (shop_id, x_shopify_topic, json.dumps(payload))
-            )
-            
-            # Process order if it's an order webhook
-            if x_shopify_topic in ["orders/create", "orders/updated"]:
-                await cur.execute("""
-                    INSERT INTO shopify.orders (shop_id, order_id, order_number, total_price, created_at)
-                    VALUES (%s, %s, %s, %s, %s)
-                """, (
-                    shop_id,
-                    payload.get('id'),
-                    payload.get('order_number'),
-                    payload.get('total_price'),
-                    payload.get('created_at')
-                ))
-            
-            await conn.commit()
-    
-    return {"status": "ok", "message": "Webhook processed"}
+
 
 
 @router.get("/status")
