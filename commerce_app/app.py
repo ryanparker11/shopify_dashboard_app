@@ -17,6 +17,7 @@ from commerce_app.core.db import init_pool, close_pool
 from commerce_app.core.routers import webhooks, health, analytics
 from commerce_app.auth.shopify_oauth import router as shopify_auth
 from commerce_app.core.routers import cogs
+from commerce_app.core.routers.gdpr_webhooks import router as gdpr_router
 
 
 
@@ -31,6 +32,7 @@ app.include_router(webhooks.router, prefix="/webhooks", tags=["webhooks"])
 app.include_router(health.router)
 app.include_router(shopify_auth)
 #app.include_router(analytics.router)
+app.include_router(gdpr_router, prefix="")
 
 
 
