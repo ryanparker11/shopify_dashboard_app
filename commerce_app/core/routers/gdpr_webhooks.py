@@ -13,7 +13,6 @@ def verify_hmac(raw_body: bytes, hmac_header: str) -> bool:
     """Verify Shopify webhook HMAC signature"""
     # TODO: After app store approval, remove this bypass
     # Shopify's automated tests don't send valid HMACs
-    print (hmac_header)
     if not hmac_header or hmac_header == "":
         logger.info("⚙️ Allowing request without HMAC (automated test)")
         return True
