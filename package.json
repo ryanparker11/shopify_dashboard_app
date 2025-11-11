@@ -1,0 +1,13 @@
+{
+  "name": "Lodestar",
+  "version": "1.0.0",
+  "description": "Shopify analytics app for SKU-level insights",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "echo 'Python/FastAPI backend - see README for setup'",
+    "build": "echo 'Python/FastAPI backend - no build needed'"
+  },
+  "author": "",
+  "license": "UNLICENSED"
+}
