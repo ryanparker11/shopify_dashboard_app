@@ -377,7 +377,7 @@ async def sync_products(shop: str, shop_id: int, access_token: str):
     from commerce_app.core.db import get_conn
     from commerce_app.core.routers.webhooks import process_product_webhook
     
-    # FIXED: Updated GraphQL query with correct field names
+    # FIXED: Removed weight/weightUnit from variant, added to inventoryItem
     bulk_query = """
     {
       products {
@@ -406,8 +406,6 @@ async def sync_products(shop: str, shop_id: int, access_token: str):
                   updatedAt
                   taxable
                   barcode
-                  weight
-                  weightUnit
                   selectedOptions {
                     name
                     value
@@ -416,6 +414,12 @@ async def sync_products(shop: str, shop_id: int, access_token: str):
                     id
                     tracked
                     requiresShipping
+                    measurement {
+                      weight {
+                        unit
+                        value
+                      }
+                    }
                   }
                   inventoryQuantity
                 }
@@ -573,7 +577,11 @@ async def sync_products(shop: str, shop_id: int, access_token: str):
                 elif "/ProductVariant/" in item_id:
                     parent_id = item.get("__parentId", "").split("/")[-1]
                     if parent_id in products_map:
-                        # FIXED: Updated variant parsing
+                        # FIXED: Get weight from inventoryItem.measurement.weight
+                        inventory_item = item.get("inventoryItem", {})
+                        measurement = inventory_item.get("measurement", {})
+                        weight_data = measurement.get("weight", {})
+                        
                         variant_data = {
                             "id": item_id.split("/")[-1],
                             "title": item.get("title"),
@@ -586,8 +594,8 @@ async def sync_products(shop: str, shop_id: int, access_token: str):
                             "updatedAt": item.get("updatedAt"),
                             "taxable": item.get("taxable"),
                             "barcode": item.get("barcode"),
-                            "weight": item.get("weight"),
-                            "weightUnit": item.get("weightUnit"),
+                            "weight": weight_data.get("value"),
+                            "weightUnit": weight_data.get("unit"),
                             "inventoryQuantity": item.get("inventoryQuantity")
                         }
                         
@@ -597,7 +605,6 @@ async def sync_products(shop: str, shop_id: int, access_token: str):
                             variant_data[f"option{i}"] = opt.get("value")
                         
                         # Parse inventoryItem data
-                        inventory_item = item.get("inventoryItem", {})
                         if inventory_item:
                             variant_data["inventoryItemId"] = inventory_item.get("id", "").split("/")[-1]
                             variant_data["inventoryManagement"] = "shopify" if inventory_item.get("tracked") else None
@@ -646,6 +653,7 @@ async def sync_product_variants(shop: str, shop_id: int, access_token: str):
     
     from commerce_app.core.db import get_conn
     
+    # FIXED: Removed weight/weightUnit from variant, added to inventoryItem
     bulk_query = """
     {
       productVariants {
@@ -662,8 +670,6 @@ async def sync_product_variants(shop: str, shop_id: int, access_token: str):
             updatedAt
             taxable
             barcode
-            weight
-            weightUnit
             selectedOptions {
               name
               value
@@ -672,6 +678,12 @@ async def sync_product_variants(shop: str, shop_id: int, access_token: str):
               id
               tracked
               requiresShipping
+              measurement {
+                weight {
+                  unit
+                  value
+                }
+              }
             }
             inventoryQuantity
             product {
@@ -820,8 +832,13 @@ async def sync_product_variants(shop: str, shop_id: int, access_token: str):
                         option2 = selected_options[1].get("value") if len(selected_options) > 1 else None
                         option3 = selected_options[2].get("value") if len(selected_options) > 2 else None
                         
-                        # Parse inventoryItem
+                        # FIXED: Parse weight from inventoryItem.measurement.weight
                         inventory_item = variant.get("inventoryItem", {})
+                        measurement = inventory_item.get("measurement", {})
+                        weight_data = measurement.get("weight", {})
+                        weight = weight_data.get("value")
+                        weight_unit = weight_data.get("unit")
+                        
                         inventory_item_id = inventory_item.get("id", "").split("/")[-1] if inventory_item else None
                         inventory_management = "shopify" if inventory_item.get("tracked") else None
                         requires_shipping = inventory_item.get("requiresShipping")
@@ -868,7 +885,7 @@ async def sync_product_variants(shop: str, shop_id: int, access_token: str):
                                 variant.get("compareAtPrice"), option1, option2, option3,
                                 variant.get("createdAt"), variant.get("updatedAt"),
                                 variant.get("taxable"), variant.get("barcode"),
-                                variant.get("weight"), variant.get("weightUnit"),
+                                weight, weight_unit,
                                 inventory_item_id, variant.get("inventoryQuantity"),
                                 inventory_management, requires_shipping
                             )
