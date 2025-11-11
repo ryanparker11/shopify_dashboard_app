@@ -635,6 +635,543 @@ async def sync_products(shop: str, shop_id: int, access_token: str):
 
 
 # ============================================================================
+# NEW FUNCTION: Product Variants Only Sync
+# ============================================================================
+async def sync_product_variants(shop: str, shop_id: int, access_token: str):
+    """
+    Fetch ALL product variants using Shopify Bulk Operations API (GraphQL).
+    Useful for updating variant-specific data like inventory and pricing.
+    """
+    print(f"🔄 Starting bulk product variants sync for {shop}")
+    
+    from commerce_app.core.db import get_conn
+    
+    bulk_query = """
+    {
+      productVariants {
+        edges {
+          node {
+            id
+            title
+            price
+            sku
+            position
+            inventoryPolicy
+            compareAtPrice
+            createdAt
+            updatedAt
+            taxable
+            barcode
+            weight
+            weightUnit
+            selectedOptions {
+              name
+              value
+            }
+            inventoryItem {
+              id
+              tracked
+              requiresShipping
+            }
+            inventoryQuantity
+            product {
+              id
+            }
+          }
+        }
+      }
+    }
+    """
+    
+    escaped_query = bulk_query.replace('\\', '\\\\').replace('"', '\\"').replace('\n', ' ')
+    
+    mutation = f'''
+    mutation {{
+      bulkOperationRunQuery(query: "{escaped_query}") {{
+        bulkOperation {{ id status }}
+        userErrors {{ field message }}
+      }}
+    }}
+    '''
+    
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        # Start bulk operation
+        try:
+            response = await client.post(
+                f"https://{shop}/admin/api/2025-10/graphql.json",
+                headers={
+                    "X-Shopify-Access-Token": access_token,
+                    "Content-Type": "application/json"
+                },
+                json={"query": mutation}
+            )
+            
+            if response.status_code != 200:
+                print(f"Failed to start variant bulk operation: {response.text}")
+                return
+            
+            data = response.json()
+            
+            if "errors" in data or data.get("data", {}).get("bulkOperationRunQuery", {}).get("userErrors"):
+                print(f"GraphQL errors: {data}")
+                return
+            
+            operation_id = data["data"]["bulkOperationRunQuery"]["bulkOperation"]["id"]
+            print(f"✅ Started variant bulk operation: {operation_id}")
+            
+        except Exception as e:
+            print(f"Error starting variant bulk operation: {e}")
+            return
+        
+        # Poll for completion
+        status_query = """
+        query {
+          node(id: "%s") {
+            ... on BulkOperation {
+              id
+              status
+              errorCode
+              objectCount
+              url
+              partialDataUrl
+            }
+          }
+        }
+        """ % operation_id
+        
+        jsonl_url = None
+        max_wait = 600
+        start_time = asyncio.get_event_loop().time()
+        
+        while True:
+            if asyncio.get_event_loop().time() - start_time > max_wait:
+                print(f"Variant bulk operation timed out")
+                return
+            
+            await asyncio.sleep(2)
+            
+            try:
+                response = await client.post(
+                    f"https://{shop}/admin/api/2025-10/graphql.json",
+                    headers={
+                        "X-Shopify-Access-Token": access_token,
+                        "Content-Type": "application/json"
+                    },
+                    json={"query": status_query}
+                )
+                
+                if response.status_code != 200:
+                    continue
+                
+                data = response.json()
+                operation = data.get("data", {}).get("node", {})
+                status = operation.get("status")
+                
+                print(f"📊 Variant sync status: {status} ({operation.get('objectCount', 0)} objects)")
+                
+                if status == "COMPLETED":
+                    jsonl_url = operation.get("url")
+                    print(f"✅ Variant bulk operation completed")
+                    break
+                elif status in ["FAILED", "CANCELED", "EXPIRED"]:
+                    print(f"Variant sync failed: {status}")
+                    jsonl_url = operation.get("partialDataUrl")
+                    break
+                    
+            except Exception as e:
+                print(f"Error polling variant bulk operation: {e}")
+                continue
+        
+        if not jsonl_url:
+            print("No variant data URL")
+            return
+        
+        # Download and process
+        print(f"📥 Downloading variant data...")
+        try:
+            response = await client.get(jsonl_url, timeout=120.0)
+            
+            if response.status_code != 200:
+                print(f"Failed to download variant data: {response.status_code}")
+                return
+                
+        except Exception as e:
+            print(f"Error downloading variant data: {e}")
+            return
+        
+        lines = response.text.strip().split('\n')
+        total_variants = 0
+        errors = 0
+        
+        async with get_conn() as conn:
+            async with conn.cursor() as cur:
+                for line in lines:
+                    if not line.strip():
+                        continue
+                    
+                    try:
+                        variant = json.loads(line)
+                        variant_id = variant.get("id", "").split("/")[-1]
+                        product_id = variant.get("product", {}).get("id", "").split("/")[-1]
+                        
+                        # Parse selectedOptions
+                        selected_options = variant.get("selectedOptions", [])
+                        option1 = selected_options[0].get("value") if len(selected_options) > 0 else None
+                        option2 = selected_options[1].get("value") if len(selected_options) > 1 else None
+                        option3 = selected_options[2].get("value") if len(selected_options) > 2 else None
+                        
+                        # Parse inventoryItem
+                        inventory_item = variant.get("inventoryItem", {})
+                        inventory_item_id = inventory_item.get("id", "").split("/")[-1] if inventory_item else None
+                        inventory_management = "shopify" if inventory_item.get("tracked") else None
+                        requires_shipping = inventory_item.get("requiresShipping")
+                        
+                        # Update variant in database
+                        await cur.execute(
+                            """
+                            INSERT INTO shopify.product_variants (
+                                shop_id, variant_id, product_id, title, price, sku, 
+                                position, inventory_policy, compare_at_price, 
+                                option1, option2, option3, created_at, updated_at, 
+                                taxable, barcode, weight, weight_unit, 
+                                inventory_item_id, inventory_quantity, 
+                                inventory_management, requires_shipping
+                            ) VALUES (
+                                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 
+                                %s, %s, %s, %s, %s, %s, %s, %s
+                            )
+                            ON CONFLICT (shop_id, variant_id) 
+                            DO UPDATE SET
+                                title = EXCLUDED.title,
+                                price = EXCLUDED.price,
+                                sku = EXCLUDED.sku,
+                                position = EXCLUDED.position,
+                                inventory_policy = EXCLUDED.inventory_policy,
+                                compare_at_price = EXCLUDED.compare_at_price,
+                                option1 = EXCLUDED.option1,
+                                option2 = EXCLUDED.option2,
+                                option3 = EXCLUDED.option3,
+                                updated_at = EXCLUDED.updated_at,
+                                taxable = EXCLUDED.taxable,
+                                barcode = EXCLUDED.barcode,
+                                weight = EXCLUDED.weight,
+                                weight_unit = EXCLUDED.weight_unit,
+                                inventory_item_id = EXCLUDED.inventory_item_id,
+                                inventory_quantity = EXCLUDED.inventory_quantity,
+                                inventory_management = EXCLUDED.inventory_management,
+                                requires_shipping = EXCLUDED.requires_shipping
+                            """,
+                            (
+                                shop_id, variant_id, product_id, variant.get("title"),
+                                variant.get("price"), variant.get("sku"),
+                                variant.get("position"), variant.get("inventoryPolicy"),
+                                variant.get("compareAtPrice"), option1, option2, option3,
+                                variant.get("createdAt"), variant.get("updatedAt"),
+                                variant.get("taxable"), variant.get("barcode"),
+                                variant.get("weight"), variant.get("weightUnit"),
+                                inventory_item_id, variant.get("inventoryQuantity"),
+                                inventory_management, requires_shipping
+                            )
+                        )
+                        
+                        total_variants += 1
+                        
+                        if total_variants % 100 == 0:
+                            await conn.commit()
+                            print(f"📦 Processed {total_variants} variants...")
+                            
+                    except Exception as e:
+                        print(f"Error processing variant: {e}")
+                        errors += 1
+                        continue
+                
+                await conn.commit()
+        
+        print(f"✅ Variant sync complete: {total_variants} variants ({errors} errors)")
+
+
+# ============================================================================
+# NEW FUNCTION: Order Line Items Sync
+# ============================================================================
+async def sync_order_line_items(shop: str, shop_id: int, access_token: str):
+    """
+    Fetch ALL order line items using Shopify Bulk Operations API (GraphQL).
+    Useful for detailed order analysis and profitability calculations.
+    """
+    print(f"🔄 Starting bulk order line items sync for {shop}")
+    
+    from commerce_app.core.db import get_conn
+    
+    bulk_query = """
+    {
+      orders {
+        edges {
+          node {
+            id
+            name
+            lineItems {
+              edges {
+                node {
+                  id
+                  title
+                  quantity
+                  variantTitle
+                  name
+                  sku
+                  variant {
+                    id
+                  }
+                  product {
+                    id
+                  }
+                  originalUnitPriceSet {
+                    shopMoney {
+                      amount
+                      currencyCode
+                    }
+                  }
+                  discountedUnitPriceSet {
+                    shopMoney {
+                      amount
+                      currencyCode
+                    }
+                  }
+                  originalTotalSet {
+                    shopMoney {
+                      amount
+                    }
+                  }
+                  discountedTotalSet {
+                    shopMoney {
+                      amount
+                    }
+                  }
+                  taxable
+                  requiresShipping
+                  fulfillableQuantity
+                  fulfillmentStatus
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    """
+    
+    escaped_query = bulk_query.replace('\\', '\\\\').replace('"', '\\"').replace('\n', ' ')
+    
+    mutation = f'''
+    mutation {{
+      bulkOperationRunQuery(query: "{escaped_query}") {{
+        bulkOperation {{ id status }}
+        userErrors {{ field message }}
+      }}
+    }}
+    '''
+    
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        # Start bulk operation
+        try:
+            response = await client.post(
+                f"https://{shop}/admin/api/2025-10/graphql.json",
+                headers={
+                    "X-Shopify-Access-Token": access_token,
+                    "Content-Type": "application/json"
+                },
+                json={"query": mutation}
+            )
+            
+            if response.status_code != 200:
+                print(f"Failed to start line items bulk operation: {response.text}")
+                return
+            
+            data = response.json()
+            
+            if "errors" in data or data.get("data", {}).get("bulkOperationRunQuery", {}).get("userErrors"):
+                print(f"GraphQL errors: {data}")
+                return
+            
+            operation_id = data["data"]["bulkOperationRunQuery"]["bulkOperation"]["id"]
+            print(f"✅ Started line items bulk operation: {operation_id}")
+            
+        except Exception as e:
+            print(f"Error starting line items bulk operation: {e}")
+            return
+        
+        # Poll for completion
+        status_query = """
+        query {
+          node(id: "%s") {
+            ... on BulkOperation {
+              id
+              status
+              errorCode
+              objectCount
+              url
+              partialDataUrl
+            }
+          }
+        }
+        """ % operation_id
+        
+        jsonl_url = None
+        max_wait = 600
+        start_time = asyncio.get_event_loop().time()
+        
+        while True:
+            if asyncio.get_event_loop().time() - start_time > max_wait:
+                print(f"Line items bulk operation timed out")
+                return
+            
+            await asyncio.sleep(2)
+            
+            try:
+                response = await client.post(
+                    f"https://{shop}/admin/api/2025-10/graphql.json",
+                    headers={
+                        "X-Shopify-Access-Token": access_token,
+                        "Content-Type": "application/json"
+                    },
+                    json={"query": status_query}
+                )
+                
+                if response.status_code != 200:
+                    continue
+                
+                data = response.json()
+                operation = data.get("data", {}).get("node", {})
+                status = operation.get("status")
+                
+                print(f"📊 Line items sync status: {status} ({operation.get('objectCount', 0)} objects)")
+                
+                if status == "COMPLETED":
+                    jsonl_url = operation.get("url")
+                    print(f"✅ Line items bulk operation completed")
+                    break
+                elif status in ["FAILED", "CANCELED", "EXPIRED"]:
+                    print(f"Line items sync failed: {status}")
+                    jsonl_url = operation.get("partialDataUrl")
+                    break
+                    
+            except Exception as e:
+                print(f"Error polling line items bulk operation: {e}")
+                continue
+        
+        if not jsonl_url:
+            print("No line items data URL")
+            return
+        
+        # Download and process
+        print(f"📥 Downloading line items data...")
+        try:
+            response = await client.get(jsonl_url, timeout=120.0)
+            
+            if response.status_code != 200:
+                print(f"Failed to download line items data: {response.status_code}")
+                return
+                
+        except Exception as e:
+            print(f"Error downloading line items data: {e}")
+            return
+        
+        lines = response.text.strip().split('\n')
+        orders_map = {}
+        
+        # Parse JSONL - group line items with their orders
+        for line in lines:
+            if not line.strip():
+                continue
+            
+            try:
+                item = json.loads(line)
+                item_id = item.get("id", "")
+                
+                if "/Order/" in item_id:
+                    order_id = item_id.split("/")[-1]
+                    orders_map[order_id] = {
+                        "id": order_id,
+                        "name": item.get("name"),
+                        "line_items": []
+                    }
+                elif "/LineItem/" in item_id:
+                    parent_id = item.get("__parentId", "").split("/")[-1]
+                    if parent_id in orders_map:
+                        orders_map[parent_id]["line_items"].append(item)
+                        
+            except Exception as e:
+                print(f"Error parsing line item: {e}")
+                continue
+        
+        # Save to database
+        total_line_items = 0
+        errors = 0
+        
+        async with get_conn() as conn:
+            async with conn.cursor() as cur:
+                for order_data in orders_map.values():
+                    order_id = order_data["id"]
+                    
+                    for line_item in order_data["line_items"]:
+                        try:
+                            line_item_id = line_item.get("id", "").split("/")[-1]
+                            variant_id = line_item.get("variant", {}).get("id", "").split("/")[-1] if line_item.get("variant") else None
+                            product_id = line_item.get("product", {}).get("id", "").split("/")[-1] if line_item.get("product") else None
+                            
+                            await cur.execute(
+                                """
+                                INSERT INTO shopify.order_line_items (
+                                    shop_id, line_item_id, order_id, product_id, variant_id,
+                                    title, quantity, sku, variant_title, name,
+                                    price, discount_amount, total_price,
+                                    taxable, requires_shipping, fulfillable_quantity,
+                                    fulfillment_status, currency
+                                ) VALUES (
+                                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                                    %s, %s, %s, %s, %s, %s, %s, %s
+                                )
+                                ON CONFLICT (shop_id, line_item_id)
+                                DO UPDATE SET
+                                    quantity = EXCLUDED.quantity,
+                                    price = EXCLUDED.price,
+                                    discount_amount = EXCLUDED.discount_amount,
+                                    total_price = EXCLUDED.total_price,
+                                    fulfillable_quantity = EXCLUDED.fulfillable_quantity,
+                                    fulfillment_status = EXCLUDED.fulfillment_status
+                                """,
+                                (
+                                    shop_id, line_item_id, order_id, product_id, variant_id,
+                                    line_item.get("title"), line_item.get("quantity"),
+                                    line_item.get("sku"), line_item.get("variantTitle"),
+                                    line_item.get("name"),
+                                    line_item.get("originalUnitPriceSet", {}).get("shopMoney", {}).get("amount"),
+                                    float(line_item.get("originalTotalSet", {}).get("shopMoney", {}).get("amount", 0)) - 
+                                    float(line_item.get("discountedTotalSet", {}).get("shopMoney", {}).get("amount", 0)),
+                                    line_item.get("discountedTotalSet", {}).get("shopMoney", {}).get("amount"),
+                                    line_item.get("taxable"), line_item.get("requiresShipping"),
+                                    line_item.get("fulfillableQuantity"),
+                                    line_item.get("fulfillmentStatus"),
+                                    line_item.get("originalUnitPriceSet", {}).get("shopMoney", {}).get("currencyCode", "USD")
+                                )
+                            )
+                            
+                            total_line_items += 1
+                            
+                            if total_line_items % 100 == 0:
+                                await conn.commit()
+                                print(f"📦 Processed {total_line_items} line items...")
+                                
+                        except Exception as e:
+                            print(f"Error processing line item: {e}")
+                            errors += 1
+                            continue
+                
+                await conn.commit()
+        
+        print(f"✅ Line items sync complete: {total_line_items} line items ({errors} errors)")
+
+
+# ============================================================================
 # Helper function (uncommented now)
 # ============================================================================
 async def mark_sync_failed(shop_id: int, error_message: str):
@@ -825,7 +1362,7 @@ async def auth_callback(request: Request, background_tasks: BackgroundTasks):
         await register_webhooks(shop, access_token)
         print(f"✅ Webhooks registered for {shop}")
         
-        # CHANGED: Run both order and product sync in background
+        # Run all sync tasks in background
         background_tasks.add_task(initial_data_sync, shop, shop_id, access_token)
         background_tasks.add_task(sync_products, shop, shop_id, access_token)
         print(f"📋 Bulk syncs queued for {shop}")
@@ -872,7 +1409,7 @@ async def sync_status(shop_domain: str):
 
 
 # ============================================================================
-# NEW ENDPOINT: Manually trigger product sync
+# SYNC ENDPOINTS: Manually trigger syncs
 # ============================================================================
 @router.post("/sync-products/{shop_domain}")
 async def trigger_product_sync(shop_domain: str, background_tasks: BackgroundTasks):
@@ -900,4 +1437,62 @@ async def trigger_product_sync(shop_domain: str, background_tasks: BackgroundTas
     return {
         "status": "started",
         "message": f"Product sync started for {shop_domain}"
+    }
+
+
+@router.post("/sync-variants/{shop_domain}")
+async def trigger_variant_sync(shop_domain: str, background_tasks: BackgroundTasks):
+    """
+    Manually trigger a product variants sync for a shop.
+    Useful for updating variant-specific data like inventory and pricing.
+    """
+    conn = db()
+    with conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT shop_id, access_token FROM shopify.shops WHERE shop_domain = %s",
+            (shop_domain,)
+        )
+        row = cur.fetchone()
+        
+        if not row:
+            raise HTTPException(404, "Shop not found")
+        
+        shop_id = row["shop_id"]
+        access_token = row["access_token"]
+    
+    # Run sync in background
+    background_tasks.add_task(sync_product_variants, shop_domain, shop_id, access_token)
+    
+    return {
+        "status": "started",
+        "message": f"Variant sync started for {shop_domain}"
+    }
+
+
+@router.post("/sync-line-items/{shop_domain}")
+async def trigger_line_items_sync(shop_domain: str, background_tasks: BackgroundTasks):
+    """
+    Manually trigger an order line items sync for a shop.
+    Useful for detailed order analysis and profitability calculations.
+    """
+    conn = db()
+    with conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT shop_id, access_token FROM shopify.shops WHERE shop_domain = %s",
+            (shop_domain,)
+        )
+        row = cur.fetchone()
+        
+        if not row:
+            raise HTTPException(404, "Shop not found")
+        
+        shop_id = row["shop_id"]
+        access_token = row["access_token"]
+    
+    # Run sync in background
+    background_tasks.add_task(sync_order_line_items, shop_domain, shop_id, access_token)
+    
+    return {
+        "status": "started",
+        "message": f"Line items sync started for {shop_domain}"
     }
