@@ -1,6 +1,6 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-name = "lodestar"
+name = "Lodestar"
 client_id = "68c92aac9cf4898ec8cdc8ce87814cf1"
 application_url = "https://app.lodestaranalytics.io"
 embedded = true
@@ -11,7 +11,7 @@ dev_store_url = "test-auth-1-2.myshopify.com"
 
 [access_scopes]
 # Use the scopes your app requires
-scopes = "read_products,read_orders,read_customers"
+scopes = "read_products,read_orders,read_customers, read_fulfillments, read_inventory"
 
 [auth]
 redirect_urls = [
@@ -24,16 +24,17 @@ api_version = "2025-10"
 
 # GDPR Compliance Webhooks (MANDATORY)
 # These three webhooks are required for all apps in the Shopify App Store
+# Note: compliance_topics require specific URIs for each topic
 [[webhooks.subscriptions]]
-topics = ["customers/data_request"]
+compliance_topics = ["customers/data_request"]
 uri = "https://api.lodestaranalytics.io/webhooks/customers/data_request"
 
 [[webhooks.subscriptions]]
-topics = ["customers/redact"]
+compliance_topics = ["customers/redact"]
 uri = "https://api.lodestaranalytics.io/webhooks/customers/redact"
 
 [[webhooks.subscriptions]]
-topics = ["shop/redact"]
+compliance_topics = ["shop/redact"]
 uri = "https://api.lodestaranalytics.io/webhooks/shop/redact"
 
 # Optional: Regular webhooks (can also be registered programmatically)

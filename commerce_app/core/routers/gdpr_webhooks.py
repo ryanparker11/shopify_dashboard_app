@@ -39,7 +39,7 @@ async def log_gdpr_request(shop_domain: str, topic: str, payload: dict):
         logger.error(f"❌ Failed to log GDPR request: {e}")
 
 
-@router.post("/webhooks/customers/data_request")
+@router.post("/customers/data_request")
 async def customers_data_request(
     request: Request,
     x_shopify_shop_domain: str = Header(...),
@@ -84,7 +84,7 @@ async def customers_data_request(
     return Response(status_code=200)
 
 
-@router.post("/webhooks/customers/redact")
+@router.post("/customers/redact")
 async def customers_redact(
     request: Request,
     x_shopify_shop_domain: str = Header(...),
@@ -186,7 +186,7 @@ async def customers_redact(
     return Response(status_code=200)
 
 
-@router.post("/webhooks/shop/redact")
+@router.post("/shop/redact")
 async def shop_redact(
     request: Request,
     x_shopify_shop_domain: str = Header(...),
