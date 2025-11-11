@@ -67,6 +67,11 @@ async def register_webhooks(shop: str, access_token: str):
         {"topic": "products/update", "address": f"{APP_URL}/webhooks/ingest"},
         {"topic": "customers/create", "address": f"{APP_URL}/webhooks/ingest"},
         {"topic": "customers/update", "address": f"{APP_URL}/webhooks/ingest"},
+
+         # GDPR webhooks (MANDATORY)
+        {"topic": "customers/data_request", "address": f"{APP_URL}/webhooks/customers/data_request"},
+        {"topic": "customers/redact", "address": f"{APP_URL}/webhooks/customers/redact"},
+        {"topic": "shop/redact", "address": f"{APP_URL}/webhooks/shop/redact"},
     ]
     
     async with httpx.AsyncClient(timeout=20.0) as client:
