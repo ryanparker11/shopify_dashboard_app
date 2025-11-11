@@ -122,7 +122,7 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
         print(f"Failed to update sync status: {e}")
     
     # Step 1: Start bulk operation
-    # Build the GraphQL query separately to avoid escaping issues
+    # FIXED: Updated to use displayFinancialStatus and displayFulfillmentStatus
     bulk_query = """
     {
       orders {
@@ -136,8 +136,8 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
             totalPriceSet { shopMoney { amount currencyCode } }
             subtotalPriceSet { shopMoney { amount } }
             totalTaxSet { shopMoney { amount } }
-            financialStatus
-            fulfillmentStatus
+            displayFinancialStatus
+            displayFulfillmentStatus
             customer { 
               id 
               email 
@@ -317,8 +317,8 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
                             "subtotal_price": order.get("subtotalPriceSet", {}).get("shopMoney", {}).get("amount", "0"),
                             "total_tax": order.get("totalTaxSet", {}).get("shopMoney", {}).get("amount", "0"),
                             "currency": order.get("totalPriceSet", {}).get("shopMoney", {}).get("currencyCode", "USD"),
-                            "financial_status": order.get("financialStatus"),
-                            "fulfillment_status": order.get("fulfillmentStatus"),
+                            "financial_status": order.get("displayFinancialStatus"),
+                            "fulfillment_status": order.get("displayFulfillmentStatus"),
                             "created_at": order.get("createdAt"),
                             "updated_at": order.get("updatedAt"),
                             "customer": {
@@ -377,7 +377,7 @@ async def sync_products(shop: str, shop_id: int, access_token: str):
     from commerce_app.core.db import get_conn
     from commerce_app.core.routers.webhooks import process_product_webhook
     
-    # GraphQL query for products and variants
+    # FIXED: Updated GraphQL query with correct field names
     bulk_query = """
     {
       products {
@@ -402,20 +402,22 @@ async def sync_products(shop: str, shop_id: int, access_token: str):
                   position
                   inventoryPolicy
                   compareAtPrice
-                  fulfillmentService
-                  inventoryManagement
-                  option1
-                  option2
-                  option3
                   createdAt
                   updatedAt
                   taxable
                   barcode
                   weight
                   weightUnit
-                  inventoryItem { id }
+                  selectedOptions {
+                    name
+                    value
+                  }
+                  inventoryItem {
+                    id
+                    tracked
+                    requiresShipping
+                  }
                   inventoryQuantity
-                  requiresShipping
                 }
               }
             }
@@ -571,7 +573,8 @@ async def sync_products(shop: str, shop_id: int, access_token: str):
                 elif "/ProductVariant/" in item_id:
                     parent_id = item.get("__parentId", "").split("/")[-1]
                     if parent_id in products_map:
-                        products_map[parent_id]["variants"].append({
+                        # FIXED: Updated variant parsing
+                        variant_data = {
                             "id": item_id.split("/")[-1],
                             "title": item.get("title"),
                             "price": item.get("price"),
@@ -579,21 +582,28 @@ async def sync_products(shop: str, shop_id: int, access_token: str):
                             "position": item.get("position"),
                             "inventoryPolicy": item.get("inventoryPolicy"),
                             "compareAtPrice": item.get("compareAtPrice"),
-                            "fulfillmentService": item.get("fulfillmentService"),
-                            "inventoryManagement": item.get("inventoryManagement"),
-                            "option1": item.get("option1"),
-                            "option2": item.get("option2"),
-                            "option3": item.get("option3"),
                             "createdAt": item.get("createdAt"),
                             "updatedAt": item.get("updatedAt"),
                             "taxable": item.get("taxable"),
                             "barcode": item.get("barcode"),
                             "weight": item.get("weight"),
                             "weightUnit": item.get("weightUnit"),
-                            "inventoryItemId": item.get("inventoryItem", {}).get("id", "").split("/")[-1] if item.get("inventoryItem") else None,
-                            "inventoryQuantity": item.get("inventoryQuantity"),
-                            "requiresShipping": item.get("requiresShipping")
-                        })
+                            "inventoryQuantity": item.get("inventoryQuantity")
+                        }
+                        
+                        # Parse selectedOptions into option1, option2, option3
+                        selected_options = item.get("selectedOptions", [])
+                        for i, opt in enumerate(selected_options[:3], 1):
+                            variant_data[f"option{i}"] = opt.get("value")
+                        
+                        # Parse inventoryItem data
+                        inventory_item = item.get("inventoryItem", {})
+                        if inventory_item:
+                            variant_data["inventoryItemId"] = inventory_item.get("id", "").split("/")[-1]
+                            variant_data["inventoryManagement"] = "shopify" if inventory_item.get("tracked") else None
+                            variant_data["requiresShipping"] = inventory_item.get("requiresShipping")
+                        
+                        products_map[parent_id]["variants"].append(variant_data)
             except Exception as e:
                 print(f"Error parsing product line: {e}")
                 continue
@@ -817,7 +827,7 @@ async def auth_callback(request: Request, background_tasks: BackgroundTasks):
         
         # CHANGED: Run both order and product sync in background
         background_tasks.add_task(initial_data_sync, shop, shop_id, access_token)
-        background_tasks.add_task(sync_products, shop, shop_id, access_token)  # NEW LINE
+        background_tasks.add_task(sync_products, shop, shop_id, access_token)
         print(f"📋 Bulk syncs queued for {shop}")
         
     except Exception as e:
