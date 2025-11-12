@@ -1,12 +1,12 @@
-// useAppBridge.ts
+// frontend/src/hooks/useAppBridge.ts
 import { useContext } from 'react';
 import type { ClientApplication } from '@shopify/app-bridge';
-import { AppBridgeContext } from '@/hooks/AppBridgeContext';
+import { AppBridgeContext } from '../hooks/AppBridgeContext';
 
-export function useAppBridge(): ClientApplication | null {
+export const useAppBridge = (): ClientApplication => {
   const app = useContext(AppBridgeContext);
   if (!app) {
-    console.warn('App Bridge not initialized - make sure you are in embedded Shopify context');
+    throw new Error('useAppBridge must be used within AppBridgeProvider');
   }
   return app;
-}
+};

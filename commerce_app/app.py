@@ -3,14 +3,11 @@ from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()
 
-# Add the project root to PYTHONPATH at runtime
-#sys.path.append(str(Path(__file__).resolve().parents[3]))  # adjust depth if needed
-
-
-import os, uvicorn, math
-from fastapi import FastAPI, Request
+import os, uvicorn, math, logging
+from fastapi import FastAPI, Request, Depends               # CHANGED: add Depends
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
+
 from commerce_app.integrations.shopify.shopify_client import get_orders, get_customers
 from commerce_app.core.routers.analytics import router as analytics_router
 from commerce_app.core.db import init_pool, close_pool
@@ -19,8 +16,8 @@ from commerce_app.auth.shopify_oauth import router as shopify_auth
 from commerce_app.core.routers import cogs
 from commerce_app.core.routers.gdpr_webhooks import router as gdpr_router
 
-
-
+# ★ NEW: session token verifier
+from commerce_app.auth.session_tokens import verify_shopify_session_token   # ADDED
 
 app = FastAPI()
 templates = Jinja2Templates(directory="commerce_app/ui")
@@ -31,12 +28,10 @@ from starlette.middleware.base import BaseHTTPMiddleware
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         response = await call_next(request)
-        
         # CRITICAL: Allow Shopify to embed your app in an iframe
         response.headers["Content-Security-Policy"] = (
             "frame-ancestors https://admin.shopify.com https://*.myshopify.com"
         )
-        
         return response
 
 # Add security headers middleware FIRST
@@ -53,48 +48,52 @@ app.add_middleware(
     ],
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["*"],   # includes Authorization
 )
 
-# mount the analytics routes
-app.include_router(analytics_router, prefix="/api", tags=["analytics"])
-app.include_router(cogs.router, prefix="/api", tags=["cogs"])
+# -------------------------------
+# Router registration
+# -------------------------------
+
+# ✅ Protect API routers with session tokens
+app.include_router(
+    analytics_router,
+    prefix="/api",
+    tags=["analytics"],
+    dependencies=[Depends(verify_shopify_session_token)]      # ADDED
+)
+
+app.include_router(
+    cogs.router,
+    prefix="/api",
+    tags=["cogs"],
+    dependencies=[Depends(verify_shopify_session_token)]      # ADDED
+)
+
+# ❗ Do NOT protect webhooks with session tokens (they use HMAC headers)
 app.include_router(webhooks.router, prefix="/webhooks", tags=["webhooks"])
+app.include_router(gdpr_router, prefix="/webhooks", tags=["gdpr"])
+
+# ❗ OAuth routes must remain public
 app.include_router(health.router)
 app.include_router(shopify_auth)
-#app.include_router(analytics.router)
-app.include_router(gdpr_router, prefix="/webhooks",tags=["gdpr"])
-
 
 @app.get("/healthz")
 def healthz():
     return {"status": "ok"}
 
-#@app.get("/", response_class=HTMLResponse)
-#async def dashboard(request: Request):
-#    orders = await get_orders(limit=20)
-#    customers = await get_customers(limit=20)
-#    revenue = sum(float(o.get("total_price", 0) or 0) for o in orders)
-#    avg_order = (revenue / len(orders)) if orders else 0
-#    return templates.TemplateResponse(
-#        "dashboard.html",
-#        {"request": request, "orders": orders, "customers": customers,
-#         "revenue": revenue, "avg_order": avg_order}
-#    )
+# --- Optional: a simple protected probe reviewers can hit from your UI ---
+@app.get("/api/me", tags=["auth-probe"], dependencies=[Depends(verify_shopify_session_token)])  # ADDED
+def me(payload = Depends(verify_shopify_session_token)):
+    # payload["sub"] is the shop's numeric id; dest is the shop URL
+    return {"ok": True, "shop": payload.get("dest"), "sub": payload.get("sub")}
 
 # at bottom of commerce_app/app.py
-import logging
 for r in app.routes:
     logging.warning("ROUTE %s %s", getattr(r, "path", ""), getattr(r, "methods", ""))
 
-# optional: a build stamp to prove you pulled the new image
-import os
 BUILD_ID = os.environ.get("BUILD_ID", "dev")
+
 @app.get("/whoami")
 def whoami():
     return {"module": "commerce_app.app", "build_id": BUILD_ID}
-
-
-
-#if __name__ == "__main__":
-#    uvicorn.run("app:dashboard", host="0.0.0.0", port=8000, factory=False)

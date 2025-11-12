@@ -9,5 +9,8 @@
     "build": "echo 'Python/FastAPI backend - no build needed'"
   },
   "author": "",
-  "license": "UNLICENSED"
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@shopify/app-bridge-react": "^4.2.7"
+  }
 }
