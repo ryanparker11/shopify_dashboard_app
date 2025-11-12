@@ -1304,7 +1304,7 @@ async def auth_callback(request: Request, background_tasks: BackgroundTasks):
             if existing_shop['updated_at'] > datetime.now(timezone.utc) - timedelta(seconds=30):
                 print(f"⚠️  Shop {shop} already installed recently, skipping duplicate callback")
                 # Skip to redirect
-                redirect_url = f"https://{shop}/admin/apps"
+                redirect_url = f"https://{shop}/admin/apps/{SHOPIFY_API_KEY}"
                 return RedirectResponse(url=redirect_url, status_code=302)
 
     # Exchange code -> token (ONLY ONCE!)
@@ -1397,7 +1397,7 @@ async def auth_callback(request: Request, background_tasks: BackgroundTasks):
         # Don't fail auth flow - merchant is still installed
 
     # Redirect to Shopify admin apps page
-    redirect_url = f"https://{shop}/admin/apps"
+    redirect_url = f"https://{shop}/admin/apps/{SHOPIFY_API_KEY}"
     return RedirectResponse(url=redirect_url, status_code=302)
 
 
