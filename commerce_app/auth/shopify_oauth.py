@@ -1144,7 +1144,7 @@ async def sync_order_line_items(shop: str, shop_id: int, access_token: str):
                             # Use discounted unit price as the "price"
                             unit_price = line_item.get("discountedUnitPriceSet", {}).get("shopMoney", {}).get("amount")
 
-                            
+
                             await cur.execute(
                                 """
                                 INSERT INTO shopify.order_line_items (
@@ -1152,8 +1152,7 @@ async def sync_order_line_items(shop: str, shop_id: int, access_token: str):
                                     title, quantity,
                                     price, total_discount, line_total,
                                 ) VALUES (
-                                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                                    %s, %s, %s, %s, %s, %s, %s, %s
+                                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                                 )
                                 ON CONFLICT (shop_id, order_id, line_number)
                                 DO UPDATE SET
