@@ -1150,7 +1150,7 @@ async def sync_order_line_items(shop: str, shop_id: int, access_token: str):
                                 INSERT INTO shopify.order_line_items (
                                     shop_id, order_id, line_number, product_id, variant_id,
                                     title, quantity,
-                                    price, total_discount, line_total,
+                                    price, total_discount, line_total
                                 ) VALUES (
                                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                                 )
