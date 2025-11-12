@@ -11,3 +11,4 @@ openpyxl
 pandas
 xlsxwriter
 python-multipart
+pyjwt
