@@ -1,7 +1,7 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
+client_id = "68c92aac9cf4890ec0cdc0ce87014cf1"
 name = "Lodestar"
-client_id = "68c92aac9cf4898ec8cdc8ce87814cf1"
 application_url = "https://app.lodestaranalytics.io"
 embedded = true
 
@@ -9,58 +9,46 @@ embedded = true
 automatically_update_urls_on_dev = true
 dev_store_url = "test-auth-1-2.myshopify.com"
 
+[webhooks]
+api_version = "2025-10"
+
+  [[webhooks.subscriptions]]
+  topics = ["app/uninstalled"]
+  uri = "https://api.lodestaranalytics.io/webhooks/customers/data_request"
+  compliance_topics = [ "customers/data_request" ]
+
+  [[webhooks.subscriptions]]
+  topics = ["app/uninstalled"]
+  uri = "https://api.lodestaranalytics.io/webhooks/customers/redact"
+  compliance_topics = [ "customers/redact" ]
+
+  [[webhooks.subscriptions]]
+  topics = ["app/uninstalled"]
+  uri = "https://api.lodestaranalytics.io/webhooks/shop/redact"
+  compliance_topics = [ "shop/redact" ]
+
+  [[webhooks.subscriptions]]
+  topics = [
+  "orders/create",
+  "orders/updated",
+  "products/create",
+  "products/update",
+  "customers/create",
+  "customers/update"
+]
+  uri = "https://api.lodestaranalytics.io/webhooks/ingest"
+
 [access_scopes]
-# Use the scopes your app requires
-scopes = "read_products,read_orders,read_customers, read_fulfillments, read_inventory"
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "read_customers,read_fulfillments,read_inventory,read_orders,read_products"
+optional_scopes = [ ]
+use_legacy_install_flow = false
 
 [auth]
 redirect_urls = [
   "https://api.lodestaranalytics.io/auth/callback",
   "https://api.lodestaranalytics.io/auth/top"
 ]
-
-[webhooks]
-api_version = "2025-10"
-
-# GDPR Compliance Webhooks (MANDATORY)
-# These three webhooks are required for all apps in the Shopify App Store
-# Note: compliance_topics require specific URIs for each topic
-[[webhooks.subscriptions]]
-compliance_topics = ["customers/data_request"]
-uri = "https://api.lodestaranalytics.io/webhooks/customers/data_request"
-
-[[webhooks.subscriptions]]
-compliance_topics = ["customers/redact"]
-uri = "https://api.lodestaranalytics.io/webhooks/customers/redact"
-
-[[webhooks.subscriptions]]
-compliance_topics = ["shop/redact"]
-uri = "https://api.lodestaranalytics.io/webhooks/shop/redact"
-
-# Optional: Regular webhooks (can also be registered programmatically)
-[[webhooks.subscriptions]]
-topics = ["orders/create"]
-uri = "https://api.lodestaranalytics.io/webhooks/ingest"
-
-[[webhooks.subscriptions]]
-topics = ["orders/updated"]
-uri = "https://api.lodestaranalytics.io/webhooks/ingest"
-
-[[webhooks.subscriptions]]
-topics = ["products/create"]
-uri = "https://api.lodestaranalytics.io/webhooks/ingest"
-
-[[webhooks.subscriptions]]
-topics = ["products/update"]
-uri = "https://api.lodestaranalytics.io/webhooks/ingest"
-
-[[webhooks.subscriptions]]
-topics = ["customers/create"]
-uri = "https://api.lodestaranalytics.io/webhooks/ingest"
-
-[[webhooks.subscriptions]]
-topics = ["customers/update"]
-uri = "https://api.lodestaranalytics.io/webhooks/ingest"
 
 [pos]
 embedded = false
