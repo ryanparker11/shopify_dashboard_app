@@ -1150,9 +1150,9 @@ async def sync_order_line_items(shop: str, shop_id: int, access_token: str):
                                 INSERT INTO shopify.order_line_items (
                                     shop_id, order_id, line_number, product_id, variant_id,
                                     title, quantity,
-                                    price, total_discount, line_total
+                                    price, total_discount
                                 ) VALUES (
-                                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                                    %s, %s, %s, %s, %s, %s, %s, %s, %s
                                 )
                                 ON CONFLICT (shop_id, order_id, line_number)
                                 DO UPDATE SET
@@ -1161,8 +1161,7 @@ async def sync_order_line_items(shop: str, shop_id: int, access_token: str):
                                     title = EXCLUDED.title,
                                     quantity = EXCLUDED.quantity,
                                     price = EXCLUDED.price,
-                                    total_discount = EXCLUDED.total_discount,
-                                    line_total = EXCLUDED.line_total
+                                    total_discount = EXCLUDED.total_discount
                                 """,
                                 (
                                     shop_id,
@@ -1173,8 +1172,7 @@ async def sync_order_line_items(shop: str, shop_id: int, access_token: str):
                                     line_item.get("title"),
                                     int(line_item.get("quantity", 0)),
                                     float(unit_price) if unit_price else 0.0,
-                                    float(total_discount),
-                                    float(discounted_total)
+                                    float(total_discount)
                                 )
                             )
                             
