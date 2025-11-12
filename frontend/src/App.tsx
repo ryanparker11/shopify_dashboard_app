@@ -14,6 +14,7 @@ import enTranslations from '@shopify/polaris/locales/en.json';
 import '@shopify/polaris/build/esm/styles.css';
 
 import ShopifyEmbedGate from './components/ShopifyEmbedGate';
+import { AppBridgeProvider } from './components/AppBridgeProvider';
 import { COGSManagement } from './components/COGSManagement';
 import { useEffect, useRef, useState } from 'react';
 import Plot from 'react-plotly.js';
@@ -359,37 +360,39 @@ export default function App() {
 
   return (
     <ShopifyEmbedGate>
-      <AppProvider i18n={enTranslations}>
-        <div style={{ padding: '20px' }}>
-          {renderSyncBanner()}
+      <AppBridgeProvider>
+        <AppProvider i18n={enTranslations}>
+          <div style={{ padding: '20px' }}>
+            {renderSyncBanner()}
 
-          <div style={{ marginTop: '30px' }}>
-            <Card>
-              <BlockStack gap="400">
-                <Text as="h1" variant="headingLg">
-                  Welcome to Lodestar
-                </Text>
-
-                {totalOrders !== null && (
-                  <Text as="p" tone="subdued">
-                    Your store has{' '}
-                    {totalOrders.toLocaleString()} orders ready to analyze.
+            <div style={{ marginTop: '30px' }}>
+              <Card>
+                <BlockStack gap="400">
+                  <Text as="h1" variant="headingLg">
+                    Welcome to Lodestar
                   </Text>
-                )}
-              </BlockStack>
-            </Card>
 
-            {/* COGS module */}
-            {shop && syncStatus?.status === 'completed' && (
-              <div style={{ marginTop: '20px' }}>
-                <COGSManagement shopDomain={shop} apiUrl={API_URL} />
-              </div>
-            )}
+                  {totalOrders !== null && (
+                    <Text as="p" tone="subdued">
+                      Your store has{' '}
+                      {totalOrders.toLocaleString()} orders ready to analyze.
+                    </Text>
+                  )}
+                </BlockStack>
+              </Card>
 
-            {renderCharts()}
+              {/* COGS module */}
+              {shop && syncStatus?.status === 'completed' && (
+                <div style={{ marginTop: '20px' }}>
+                  <COGSManagement shopDomain={shop} apiUrl={API_URL} />
+                </div>
+              )}
+
+              {renderCharts()}
+            </div>
           </div>
-        </div>
-      </AppProvider>
+        </AppProvider>
+      </AppBridgeProvider>
     </ShopifyEmbedGate>
   );
 }
