@@ -18,6 +18,7 @@ import { AppBridgeProvider } from './components/AppBridgeProvider';
 import { COGSManagement } from './components/COGSManagement';
 import { useEffect, useRef, useState } from 'react';
 import Plot from 'react-plotly.js';
+import { useAuthenticatedFetch } from './hooks/useAuthenticatedFetch';
 
 interface SyncStatus {
   status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'not_found';
@@ -33,7 +34,7 @@ interface ChartData {
   export_url?: string; // e.g. "/charts/{shop}/export/{key}"
 }
 
-export default function App() {
+function AppContent() {
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [chartData, setChartData] = useState<ChartData[]>([]);
@@ -44,6 +45,9 @@ export default function App() {
   const [showBanner, setShowBanner] = useState(false);
   const prevStatusRef = useRef<SyncStatus['status'] | null>(null);
 
+  // USE AUTHENTICATED FETCH
+  const authenticatedFetch = useAuthenticatedFetch();
+
   const API_URL =
     import.meta.env.VITE_API_URL || 'https://api.lodestaranalytics.io';
 
@@ -53,11 +57,10 @@ export default function App() {
 
   async function fetchOrdersSummary(shopDomain: string) {
     try {
-      const res = await fetch(
+      const res = await authenticatedFetch(
         `${API_URL}/api/orders/summary?shop_domain=${encodeURIComponent(
           shopDomain
-        )}`,
-        { credentials: 'include' }
+        )}`
       );
 
       if (!res.ok) return;
@@ -71,9 +74,8 @@ export default function App() {
 
   const fetchChartData = async (shopName: string) => {
     try {
-      const response = await fetch(
-        `${API_URL}/api/charts/${encodeURIComponent(shopName)}`,
-        { credentials: 'include' }
+      const response = await authenticatedFetch(
+        `${API_URL}/api/charts/${encodeURIComponent(shopName)}`
       );
 
       if (!response.ok)
@@ -104,7 +106,7 @@ export default function App() {
       const url = resolveExportUrl(chart.export_url);
       if (!url) return;
 
-      const res = await fetch(url, { credentials: 'include' });
+      const res = await authenticatedFetch(url);
       if (!res.ok) throw new Error(`Export failed: ${res.status}`);
 
       const blob = await res.blob();
@@ -146,9 +148,8 @@ export default function App() {
 
     const checkSyncStatus = async () => {
       try {
-        const response = await fetch(
-          `${API_URL}/auth/sync-status/${encodeURIComponent(shopParam)}`,
-          { credentials: 'include' }
+        const response = await authenticatedFetch(
+          `${API_URL}/auth/sync-status/${encodeURIComponent(shopParam)}`
         );
 
         const data: SyncStatus = await response.json();
@@ -186,7 +187,7 @@ export default function App() {
     };
 
     checkSyncStatus();
-  }, []);
+  }, [authenticatedFetch]);
 
   // --------------------------------------------------------------------
   // Effect: optimized order-count refresh (focus-based polling)
@@ -208,7 +209,7 @@ export default function App() {
       window.removeEventListener('focus', onFocus);
       clearInterval(intervalId);
     };
-  }, [shop]);
+  }, [shop, authenticatedFetch]);
 
   // --------------------------------------------------------------------
   // Rendering helpers
@@ -359,39 +360,45 @@ export default function App() {
   // --------------------------------------------------------------------
 
   return (
+    <AppProvider i18n={enTranslations}>
+      <div style={{ padding: '20px' }}>
+        {renderSyncBanner()}
+
+        <div style={{ marginTop: '30px' }}>
+          <Card>
+            <BlockStack gap="400">
+              <Text as="h1" variant="headingLg">
+                Welcome to Lodestar
+              </Text>
+
+              {totalOrders !== null && (
+                <Text as="p" tone="subdued">
+                  Your store has{' '}
+                  {totalOrders.toLocaleString()} orders ready to analyze.
+                </Text>
+              )}
+            </BlockStack>
+          </Card>
+
+          {/* COGS module */}
+          {shop && syncStatus?.status === 'completed' && (
+            <div style={{ marginTop: '20px' }}>
+              <COGSManagement shopDomain={shop} apiUrl={API_URL} />
+            </div>
+          )}
+
+          {renderCharts()}
+        </div>
+      </div>
+    </AppProvider>
+  );
+}
+
+export default function App() {
+  return (
     <ShopifyEmbedGate>
       <AppBridgeProvider>
-        <AppProvider i18n={enTranslations}>
-          <div style={{ padding: '20px' }}>
-            {renderSyncBanner()}
-
-            <div style={{ marginTop: '30px' }}>
-              <Card>
-                <BlockStack gap="400">
-                  <Text as="h1" variant="headingLg">
-                    Welcome to Lodestar
-                  </Text>
-
-                  {totalOrders !== null && (
-                    <Text as="p" tone="subdued">
-                      Your store has{' '}
-                      {totalOrders.toLocaleString()} orders ready to analyze.
-                    </Text>
-                  )}
-                </BlockStack>
-              </Card>
-
-              {/* COGS module */}
-              {shop && syncStatus?.status === 'completed' && (
-                <div style={{ marginTop: '20px' }}>
-                  <COGSManagement shopDomain={shop} apiUrl={API_URL} />
-                </div>
-              )}
-
-              {renderCharts()}
-            </div>
-          </div>
-        </AppProvider>
+        <AppContent />
       </AppBridgeProvider>
     </ShopifyEmbedGate>
   );
