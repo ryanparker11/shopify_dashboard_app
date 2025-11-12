@@ -74,17 +74,27 @@ function AppContent() {
 
   const fetchChartData = async (shopName: string) => {
     try {
+      console.log('🔍 Fetching charts for shop:', shopName);
+      console.log('🔍 API_URL:', API_URL);
+      
       const response = await authenticatedFetch(
         `${API_URL}/api/charts/${encodeURIComponent(shopName)}`
       );
 
-      if (!response.ok)
+      console.log('📊 Chart response status:', response.status);
+      console.log('📊 Chart response headers:', Object.fromEntries(response.headers.entries()));
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`❌ Charts fetch failed: ${response.status}`, errorText);
         throw new Error(`Charts fetch failed: ${response.status}`);
+      }
 
       const data = await response.json();
+      console.log('✅ Charts loaded successfully:', data.charts?.length || 0, 'charts');
       setChartData(data.charts || []);
     } catch (error) {
-      console.error('Failed to fetch chart data:', error);
+      console.error('💥 Failed to fetch chart data:', error);
     }
   };
 
@@ -104,12 +114,27 @@ function AppContent() {
   const downloadChart = async (chart: ChartData) => {
     try {
       const url = resolveExportUrl(chart.export_url);
-      if (!url) return;
+      if (!url) {
+        console.error('No export URL for chart:', chart);
+        return;
+      }
 
+      console.log('Attempting to download from:', url);
+      
+      // Now using authenticatedFetch since backend validates session tokens
       const res = await authenticatedFetch(url);
-      if (!res.ok) throw new Error(`Export failed: ${res.status}`);
+      
+      console.log('Download response status:', res.status);
+      console.log('Download response headers:', res.headers);
+      
+      if (!res.ok) {
+        const errorText = await res.text();
+        console.error('Download failed with error:', errorText);
+        throw new Error(`Export failed: ${res.status} - ${errorText}`);
+      }
 
       const blob = await res.blob();
+      console.log('Blob created, size:', blob.size, 'type:', blob.type);
 
       const filename = `${chart.key || 'chart'}_${new Date()
         .toISOString()
@@ -125,9 +150,11 @@ function AppContent() {
       a.remove();
 
       window.URL.revokeObjectURL(objectUrl);
+      
+      console.log('Download completed successfully');
     } catch (err) {
       console.error('Download error:', err);
-      alert('Failed to download chart data. Please try again.');
+      alert(`Failed to download chart data: ${err instanceof Error ? err.message : 'Unknown error'}`);
     }
   };
 
@@ -146,48 +173,58 @@ function AppContent() {
 
     setShop(shopParam);
 
-    const checkSyncStatus = async () => {
-      try {
-        const response = await authenticatedFetch(
-          `${API_URL}/auth/sync-status/${encodeURIComponent(shopParam)}`
-        );
+    // IMPORTANT: Wait for authenticatedFetch to be ready (App Bridge initialized)
+    // We need a small delay to ensure App Bridge is fully set up
+    const initializeData = async () => {
+      // Wait a bit for App Bridge to initialize
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      const checkSyncStatus = async () => {
+        try {
+          // Now using authenticatedFetch since backend validates session tokens
+          const response = await authenticatedFetch(
+            `${API_URL}/auth/sync-status/${encodeURIComponent(shopParam)}`
+          );
 
-        const data: SyncStatus = await response.json();
-        setSyncStatus(data);
-        setIsLoading(false);
+          const data: SyncStatus = await response.json();
+          setSyncStatus(data);
+          setIsLoading(false);
 
-        const was = prevStatusRef.current;
-        const now = data.status;
+          const was = prevStatusRef.current;
+          const now = data.status;
 
-        if (now === 'pending' || now === 'in_progress') {
-          setShowBanner(true);
-        } else if (
-          (was === 'pending' || was === 'in_progress') &&
-          (now === 'completed' || now === 'failed')
-        ) {
-          setShowBanner(true);
-        } else {
-          setShowBanner(false);
+          if (now === 'pending' || now === 'in_progress') {
+            setShowBanner(true);
+          } else if (
+            (was === 'pending' || was === 'in_progress') &&
+            (now === 'completed' || now === 'failed')
+          ) {
+            setShowBanner(true);
+          } else {
+            setShowBanner(false);
+          }
+
+          prevStatusRef.current = now;
+
+          if (data.status === 'completed') {
+            fetchChartData(shopParam);
+            fetchOrdersSummary(shopParam);
+          }
+
+          if (data.status === 'pending' || data.status === 'in_progress') {
+            setTimeout(checkSyncStatus, 3000);
+          }
+        } catch (error) {
+          console.error('Failed to fetch sync status:', error);
+          setIsLoading(false);
         }
+      };
 
-        prevStatusRef.current = now;
-
-        if (data.status === 'completed') {
-          fetchChartData(shopParam);
-          fetchOrdersSummary(shopParam);
-        }
-
-        if (data.status === 'pending' || data.status === 'in_progress') {
-          setTimeout(checkSyncStatus, 3000);
-        }
-      } catch (error) {
-        console.error('Failed to fetch sync status:', error);
-        setIsLoading(false);
-      }
+      checkSyncStatus();
     };
 
-    checkSyncStatus();
-  }, [authenticatedFetch]);
+    initializeData();
+  }, []); // Remove authenticatedFetch dependency since checkSyncStatus uses regular fetch
 
   // --------------------------------------------------------------------
   // Effect: optimized order-count refresh (focus-based polling)
@@ -209,7 +246,7 @@ function AppContent() {
       window.removeEventListener('focus', onFocus);
       clearInterval(intervalId);
     };
-  }, [shop, authenticatedFetch]);
+  }, [shop]); // authenticatedFetch is stable and doesn't need to be in dependencies
 
   // --------------------------------------------------------------------
   // Rendering helpers
