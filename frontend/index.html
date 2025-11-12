@@ -5,11 +5,8 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     
-    <!-- CRITICAL: Allow Shopify to embed your app in an iframe -->
-    <meta 
-      http-equiv="Content-Security-Policy" 
-      content="frame-ancestors https://admin.shopify.com https://*.myshopify.com;" 
-    />
+    <!-- NOTE: frame-ancestors CSP MUST be set as HTTP header, not meta tag -->
+    <!-- This is handled by the backend SecurityHeadersMiddleware -->
     
     <title>Lodestar Analytics</title>
   </head>

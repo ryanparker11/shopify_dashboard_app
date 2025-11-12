@@ -44,6 +44,9 @@ app.add_middleware(
     allow_origins=[
         "https://app.lodestaranalytics.io",
         "http://localhost:5173",  # for local development
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"]
     ],
     allow_credentials=True,
     allow_methods=["*"],
