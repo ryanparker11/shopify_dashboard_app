@@ -25,6 +25,37 @@ from commerce_app.core.routers.gdpr_webhooks import router as gdpr_router
 app = FastAPI()
 templates = Jinja2Templates(directory="commerce_app/ui")
 
+# ADD THIS: Security headers middleware for Shopify embedding
+from starlette.middleware.base import BaseHTTPMiddleware
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        
+        # CRITICAL: Allow Shopify to embed your app in an iframe
+        response.headers["Content-Security-Policy"] = (
+            "frame-ancestors https://admin.shopify.com https://*.myshopify.com"
+        )
+        
+        return response
+
+# Add security headers middleware FIRST
+app.add_middleware(SecurityHeadersMiddleware)
+
+# Then add CORS
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://app.lodestaranalytics.io",
+        "http://localhost:5173"  # for local development
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # mount the analytics routes
 app.include_router(analytics_router, prefix="/api", tags=["analytics"])
 app.include_router(cogs.router, prefix="/api", tags=["cogs"])
@@ -33,25 +64,6 @@ app.include_router(health.router)
 app.include_router(shopify_auth)
 #app.include_router(analytics.router)
 app.include_router(gdpr_router, prefix="/webhooks",tags=["gdpr"])
-
-
-
-
-from fastapi.middleware.cors import CORSMiddleware
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "https://app.lodestaranalytics.io",
-        "http://localhost:5173",  # for local development
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"]
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 
 @app.get("/healthz")
