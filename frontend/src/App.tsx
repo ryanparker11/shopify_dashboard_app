@@ -16,7 +16,7 @@ import '@shopify/polaris/build/esm/styles.css';
 import ShopifyEmbedGate from './components/ShopifyEmbedGate';
 import { AppBridgeProvider } from './components/AppBridgeProvider';
 import { COGSManagement } from './components/COGSManagement';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import Plot from 'react-plotly.js';
 import { useAppBridge } from '@/hooks/useAppBridge';
 import { getSessionToken } from '@shopify/app-bridge/utilities';
@@ -49,8 +49,8 @@ function AppContent() {
   // Get App Bridge instance directly
   const app = useAppBridge();
   
-  // Create authenticatedFetch inline so we KNOW it has access to app
-  const authenticatedFetch = async (url: string, options: RequestInit = {}) => {
+  // Create authenticatedFetch with useCallback so it updates when app changes
+  const authenticatedFetch = useCallback(async (url: string, options: RequestInit = {}) => {
     console.log('🔐 AUTH FETCH for:', url);
     console.log('🔐 App available:', !!app);
     
@@ -76,7 +76,7 @@ function AppContent() {
       console.error('❌ Token error:', error);
       throw error;
     }
-  };
+  }, [app]); // Re-create this function whenever app changes
 
   const API_URL =
     import.meta.env.VITE_API_URL || 'https://api.lodestaranalytics.io';
