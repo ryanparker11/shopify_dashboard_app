@@ -1,15 +1,75 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Header, Depends
 from fastapi.responses import StreamingResponse
 from commerce_app.core.db import get_conn
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from io import BytesIO
 from datetime import datetime
 import pandas as pd
+import jwt
+import os
 
 router = APIRouter()
 
+# Get Shopify API secret for JWT validation
+SHOPIFY_API_SECRET = os.getenv("SHOPIFY_API_SECRET")
+
+if not SHOPIFY_API_SECRET:
+    raise RuntimeError("SHOPIFY_API_SECRET environment variable is required")
+
+
+async def validate_session_token(authorization: Optional[str] = Header(None)) -> dict:
+    """
+    Validate Shopify session token (JWT) from Authorization header.
+    Returns the decoded payload if valid.
+    """
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Missing Authorization header")
+    
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid Authorization format. Expected 'Bearer <token>'")
+    
+    token = authorization.replace("Bearer ", "")
+    
+    try:
+        # Decode and verify the JWT using Shopify's shared secret
+        payload = jwt.decode(
+            token,
+            SHOPIFY_API_SECRET,
+            algorithms=["HS256"],
+            audience=os.getenv("SHOPIFY_API_KEY")  # Verify the audience is your app
+        )
+        
+        # Extract shop domain from the 'dest' claim
+        shop_domain = payload.get("dest")
+        if not shop_domain:
+            raise HTTPException(status_code=401, detail="Invalid token: missing shop domain")
+        
+        return {
+            "shop": shop_domain.replace("https://", "").replace("http://", ""),
+            "user_id": payload.get("sub"),
+            "exp": payload.get("exp"),
+            "iss": payload.get("iss")
+        }
+        
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Session token expired")
+    except jwt.InvalidTokenError as e:
+        raise HTTPException(status_code=401, detail=f"Invalid session token: {str(e)}")
+
+
 @router.get("/orders/summary")
-async def orders_summary(shop_domain: str):
+async def orders_summary(
+    shop_domain: str,
+    session: dict = Depends(validate_session_token)
+):
+    """
+    Get order summary statistics for a shop.
+    Requires valid session token.
+    """
+    # Verify the requested shop matches the authenticated shop
+    if session["shop"] != shop_domain:
+        raise HTTPException(status_code=403, detail="Access denied: shop mismatch")
+    
     sql = """
     SELECT
       COUNT(*)::int                         AS total_orders,
@@ -31,8 +91,21 @@ async def orders_summary(shop_domain: str):
                 "avg_order_value": float(aov) if aov is not None else 0.0,
             }
 
+
 @router.get("/orders/revenue-by-day")
-async def revenue_by_day(shop_domain: str, days: int = 30):
+async def revenue_by_day(
+    shop_domain: str,
+    days: int = 30,
+    session: dict = Depends(validate_session_token)
+):
+    """
+    Get daily revenue for a shop over the specified number of days.
+    Requires valid session token.
+    """
+    # Verify the requested shop matches the authenticated shop
+    if session["shop"] != shop_domain:
+        raise HTTPException(status_code=403, detail="Access denied: shop mismatch")
+    
     sql = """
     SELECT order_date::text, COALESCE(gross_revenue,0)::numeric
     FROM shopify.v_order_daily
@@ -48,10 +121,18 @@ async def revenue_by_day(shop_domain: str, days: int = 30):
 
 
 @router.get("/charts/{shop_domain}")
-async def get_charts(shop_domain: str) -> Dict[str, List[Dict[str, Any]]]:
+async def get_charts(
+    shop_domain: str,
+    session: dict = Depends(validate_session_token)
+) -> Dict[str, List[Dict[str, Any]]]:
     """
     Generate Plotly chart data for a specific shop, and include export URLs.
+    Requires valid session token.
     """
+    # Verify the requested shop matches the authenticated shop
+    if session["shop"] != shop_domain:
+        raise HTTPException(status_code=403, detail="Access denied: shop mismatch")
+    
     try:
         charts: List[Dict[str, Any]] = []
 
@@ -214,20 +295,32 @@ async def get_charts(shop_domain: str) -> Dict[str, List[Dict[str, Any]]]:
 
         return {"charts": charts}
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error generating charts: {str(e)}")
 
 
 @router.get("/charts/{shop_domain}/export/{chart_key}")
-async def export_chart_excel(shop_domain: str, chart_key: str):
+async def export_chart_excel(
+    shop_domain: str,
+    chart_key: str,
+    session: dict = Depends(validate_session_token)
+):
     """
     Export the underlying dataset for a chart as an Excel file.
+    Requires valid session token.
+    
     Valid chart_key values:
       - monthly_revenue
       - top_products_revenue
       - daily_orders_30d
       - daily_revenue_30d
     """
+    # Verify the requested shop matches the authenticated shop
+    if session["shop"] != shop_domain:
+        raise HTTPException(status_code=403, detail="Access denied: shop mismatch")
+    
     try:
         async with get_conn() as conn:
             if chart_key == "monthly_revenue":
