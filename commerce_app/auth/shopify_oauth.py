@@ -1128,6 +1128,7 @@ async def sync_order_line_items(shop: str, shop_id: int, access_token: str):
             async with conn.cursor() as cur:
                 for order_data in orders_map.values():
                     order_id = order_data["id"]
+                    line_number = 1
                     
                     for line_item in order_data["line_items"]:
                         try:
@@ -1166,7 +1167,7 @@ async def sync_order_line_items(shop: str, shop_id: int, access_token: str):
                                 (
                                     shop_id,
                                     int(order_id),
-                                    int(line_item_id),  # Using line_item_id as line_number (int4)
+                                    line_number,  # Use counter instead of line_item_id
                                     int(product_id) if product_id else None,
                                     int(variant_id) if variant_id else None,
                                     line_item.get("title"),
@@ -1176,6 +1177,7 @@ async def sync_order_line_items(shop: str, shop_id: int, access_token: str):
                                 )
                             )
                             
+                            line_number += 1
                             total_line_items += 1
                             
                             if total_line_items % 100 == 0:
@@ -1185,6 +1187,7 @@ async def sync_order_line_items(shop: str, shop_id: int, access_token: str):
                         except Exception as e:
                             print(f"Error processing line item: {e}")
                             errors += 1
+                            await conn.rollback() # Rollback failed transaction
                             continue
                 
                 await conn.commit()
