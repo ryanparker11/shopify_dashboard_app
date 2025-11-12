@@ -16,7 +16,7 @@ import '@shopify/polaris/build/esm/styles.css';
 import ShopifyEmbedGate from './components/ShopifyEmbedGate';
 import { AppBridgeProvider } from './components/AppBridgeProvider';
 import { COGSManagement } from './components/COGSManagement';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, } from 'react';
 import Plot from 'react-plotly.js';
 import { useAppBridge } from '@/hooks/useAppBridge';
 import { getSessionToken } from '@shopify/app-bridge/utilities';
@@ -70,7 +70,14 @@ function AppContent() {
 
     try {
       console.log('🔑 Getting token...');
-      const token = await getSessionToken(currentApp);
+      
+      // Add timeout to prevent hanging forever
+      const tokenPromise = getSessionToken(currentApp);
+      const timeoutPromise = new Promise<never>((_, reject) => 
+        setTimeout(() => reject(new Error('Token fetch timeout')), 5000)
+      );
+      
+      const token = await Promise.race([tokenPromise, timeoutPromise]);
       console.log('✅ Got token, length:', token?.length);
 
       return fetch(url, {
@@ -83,7 +90,9 @@ function AppContent() {
       });
     } catch (error) {
       console.error('❌ Token error:', error);
-      throw error;
+      console.warn('⚠️  Falling back to regular fetch');
+      // Fallback to regular fetch if token fails
+      return fetch(url, { credentials: 'include', ...options });
     }
   };
 
