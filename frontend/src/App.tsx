@@ -18,7 +18,8 @@ import { AppBridgeProvider } from './components/AppBridgeProvider';
 import { COGSManagement } from './components/COGSManagement';
 import { useEffect, useRef, useState } from 'react';
 import Plot from 'react-plotly.js';
-import { useAuthenticatedFetch } from '@/hooks/useAuthenticatedFetch';
+import { useAppBridge } from '@/hooks/useAppBridge';
+import { getSessionToken } from '@shopify/app-bridge/utilities';
 
 interface SyncStatus {
   status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'not_found';
@@ -45,8 +46,37 @@ function AppContent() {
   const [showBanner, setShowBanner] = useState(false);
   const prevStatusRef = useRef<SyncStatus['status'] | null>(null);
 
-  // USE AUTHENTICATED FETCH
-  const authenticatedFetch = useAuthenticatedFetch();
+  // Get App Bridge instance directly
+  const app = useAppBridge();
+  
+  // Create authenticatedFetch inline so we KNOW it has access to app
+  const authenticatedFetch = async (url: string, options: RequestInit = {}) => {
+    console.log('🔐 AUTH FETCH for:', url);
+    console.log('🔐 App available:', !!app);
+    
+    if (!app) {
+      console.warn('⚠️  No app - using regular fetch');
+      return fetch(url, { credentials: 'include', ...options });
+    }
+
+    try {
+      console.log('🔑 Getting token...');
+      const token = await getSessionToken(app);
+      console.log('✅ Got token, length:', token?.length);
+
+      return fetch(url, {
+        credentials: 'include',
+        ...options,
+        headers: {
+          ...options.headers,
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+    } catch (error) {
+      console.error('❌ Token error:', error);
+      throw error;
+    }
+  };
 
   const API_URL =
     import.meta.env.VITE_API_URL || 'https://api.lodestaranalytics.io';
@@ -76,6 +106,7 @@ function AppContent() {
     try {
       console.log('🔍 Fetching charts for shop:', shopName);
       console.log('🔍 API_URL:', API_URL);
+      console.log('🔍 authenticatedFetch function available:', typeof authenticatedFetch);
       
       const response = await authenticatedFetch(
         `${API_URL}/api/charts/${encodeURIComponent(shopName)}`
