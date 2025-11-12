@@ -1162,19 +1162,19 @@ async def sync_order_line_items(shop: str, shop_id: int, access_token: str):
                                     quantity = EXCLUDED.quantity,
                                     price = EXCLUDED.price,
                                     total_discount = EXCLUDED.total_discount,
-                                    line_total = EXCLUDED.line_total,
+                                    line_total = EXCLUDED.line_total
                                 """,
                                 (
                                     shop_id,
-                                    order_id,
-                                    line_item_id,  # Using line_item_id as line_number (int4)
-                                    product_id,
-                                    variant_id,
+                                    int(order_id),
+                                    int(line_item_id),  # Using line_item_id as line_number (int4)
+                                    int(product_id) if product_id else None,
+                                    int(variant_id) if variant_id else None,
                                     line_item.get("title"),
-                                    line_item.get("quantity"),
-                                    unit_price,
-                                    total_discount,
-                                    discounted_total
+                                    int(line_item.get("quantity", 0)),
+                                    float(unit_price) if unit_price else 0.0,
+                                    float(total_discount),
+                                    float(discounted_total)
                                 )
                             )
                             
