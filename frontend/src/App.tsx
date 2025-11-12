@@ -18,7 +18,7 @@ import { AppBridgeProvider } from './components/AppBridgeProvider';
 import { COGSManagement } from './components/COGSManagement';
 import { useEffect, useRef, useState } from 'react';
 import Plot from 'react-plotly.js';
-import { useAuthenticatedFetch } from './hooks/useAuthenticatedFetch';
+import { useAuthenticatedFetch } from '@/hooks/useAuthenticatedFetch';
 
 interface SyncStatus {
   status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'not_found';
