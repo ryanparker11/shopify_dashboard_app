@@ -49,19 +49,28 @@ function AppContent() {
   // Get App Bridge instance directly
   const app = useAppBridge();
   
-  // Create authenticatedFetch with useCallback so it updates when app changes
-  const authenticatedFetch = useCallback(async (url: string, options: RequestInit = {}) => {
-    console.log('🔐 AUTH FETCH for:', url);
-    console.log('🔐 App available:', !!app);
+  // Store app in a ref so we always have the latest value
+  const appRef = useRef(app);
+  useEffect(() => {
+    appRef.current = app;
+    console.log('📝 App ref updated to:', app);
+  }, [app]);
+  
+  // Function that reads from ref at call time
+  const authenticatedFetch = async (url: string, options: RequestInit = {}) => {
+    const currentApp = appRef.current; // Read current value from ref
     
-    if (!app) {
+    console.log('🔐 AUTH FETCH for:', url);
+    console.log('🔐 App available:', !!currentApp);
+    
+    if (!currentApp) {
       console.warn('⚠️  No app - using regular fetch');
       return fetch(url, { credentials: 'include', ...options });
     }
 
     try {
       console.log('🔑 Getting token...');
-      const token = await getSessionToken(app);
+      const token = await getSessionToken(currentApp);
       console.log('✅ Got token, length:', token?.length);
 
       return fetch(url, {
@@ -76,7 +85,7 @@ function AppContent() {
       console.error('❌ Token error:', error);
       throw error;
     }
-  }, [app]); // Re-create this function whenever app changes
+  };
 
   const API_URL =
     import.meta.env.VITE_API_URL || 'https://api.lodestaranalytics.io';
