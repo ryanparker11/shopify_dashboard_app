@@ -16,7 +16,7 @@ import '@shopify/polaris/build/esm/styles.css';
 import ShopifyEmbedGate from './components/ShopifyEmbedGate';
 import { AppBridgeProvider } from './components/AppBridgeProvider';
 import { COGSManagement } from './components/COGSManagement';
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Plot from 'react-plotly.js';
 import { useAppBridge } from '@/hooks/useAppBridge';
 import { getSessionToken } from '@shopify/app-bridge/utilities';
