@@ -1,33 +1,44 @@
-// useAuthenticatedFetch.ts
-import { getSessionToken } from '@shopify/app-bridge/utilities';
+// useAuthenticatedFetch.ts - Using App Bridge's built-in fetch
 import { useAppBridge } from '@/hooks/useAppBridge';
+import { useCallback, useEffect, useRef } from 'react';
+import { authenticatedFetch } from '@shopify/app-bridge/utilities';
 
 export function useAuthenticatedFetch() {
   const app = useAppBridge();
+  const appRef = useRef(app);
 
-  const authenticatedFetch = async (url: string, options: RequestInit = {}) => {
-    if (!app) {
-      // If no App Bridge, make regular fetch (for non-embedded context)
-      return fetch(url, options);
+  useEffect(() => {
+    appRef.current = app;
+  }, [app]);
+
+  const makeAuthenticatedRequest = useCallback(async (url: string, options: RequestInit = {}) => {
+    console.log('🔐 Making authenticated request to:', url);
+    
+    const currentApp = appRef.current;
+    
+    if (!currentApp) {
+      console.warn('⚠️  No App Bridge - falling back to regular fetch');
+      return fetch(url, { credentials: 'include', ...options });
     }
 
     try {
-      // Get fresh session token for this request
-      const token = await getSessionToken(app);
-      console.log('Session token retrieved for request');
-
-      return fetch(url, {
-        ...options,
-        headers: {
-          ...options.headers,
-          'Authorization': `Bearer ${token}`,
-        },
-      });
+      // Use App Bridge's authenticatedFetch utility
+      // This handles token fetching automatically
+      const fetchFunction = authenticatedFetch(currentApp);
+      
+      console.log('🔑 Using App Bridge authenticated fetch...');
+      
+      const response = await fetchFunction(url, options);
+      
+      console.log('✅ Request completed:', response.status);
+      
+      return response;
     } catch (error) {
-      console.error('Failed to get session token:', error);
-      throw error;
+      console.error('❌ Authenticated fetch error:', error);
+      console.warn('⚠️  Falling back to regular fetch');
+      return fetch(url, { credentials: 'include', ...options });
     }
-  };
+  }, []);
 
-  return authenticatedFetch;
+  return makeAuthenticatedRequest;
 }
