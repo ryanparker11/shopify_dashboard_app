@@ -1382,6 +1382,7 @@ async def auth_callback(request: Request, background_tasks: BackgroundTasks):
         # Run all sync tasks in background
         background_tasks.add_task(initial_data_sync, shop, shop_id, access_token)
         background_tasks.add_task(sync_products, shop, shop_id, access_token)
+        background_tasks.add_task(sync_order_line_items, shop, shop_id, access_token)
         print(f"📋 Bulk syncs queued for {shop}")
         
     except Exception as e:
