@@ -173,20 +173,28 @@ function AppContent() {
 
     setShop(shopParam);
 
-    // IMPORTANT: Wait for authenticatedFetch to be ready (App Bridge initialized)
+    // IMPORTANT: Wait for App Bridge to be ready before making API calls
     // We need a small delay to ensure App Bridge is fully set up
     const initializeData = async () => {
       // Wait a bit for App Bridge to initialize
       await new Promise(resolve => setTimeout(resolve, 500));
       
+      console.log('🚀 Starting data initialization after App Bridge delay');
+      
       const checkSyncStatus = async () => {
         try {
+          console.log('📡 Calling sync-status endpoint');
+          
           // Now using authenticatedFetch since backend validates session tokens
           const response = await authenticatedFetch(
             `${API_URL}/auth/sync-status/${encodeURIComponent(shopParam)}`
           );
 
+          console.log('📡 Sync-status response:', response.status);
+
           const data: SyncStatus = await response.json();
+          console.log('📡 Sync-status data:', data);
+          
           setSyncStatus(data);
           setIsLoading(false);
 
@@ -207,6 +215,7 @@ function AppContent() {
           prevStatusRef.current = now;
 
           if (data.status === 'completed') {
+            console.log('✅ Sync completed - fetching charts and orders');
             fetchChartData(shopParam);
             fetchOrdersSummary(shopParam);
           }
@@ -215,7 +224,7 @@ function AppContent() {
             setTimeout(checkSyncStatus, 3000);
           }
         } catch (error) {
-          console.error('Failed to fetch sync status:', error);
+          console.error('💥 Failed to fetch sync status:', error);
           setIsLoading(false);
         }
       };
