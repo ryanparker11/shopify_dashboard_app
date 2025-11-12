@@ -1135,40 +1135,47 @@ async def sync_order_line_items(shop: str, shop_id: int, access_token: str):
                             variant_id = line_item.get("variant", {}).get("id", "").split("/")[-1] if line_item.get("variant") else None
                             product_id = line_item.get("product", {}).get("id", "").split("/")[-1] if line_item.get("product") else None
                             
+
+                            # Parse pricing - calculate discount
+                            original_total = float(line_item.get("originalTotalSet", {}).get("shopMoney", {}).get("amount", 0))
+                            discounted_total = float(line_item.get("discountedTotalSet", {}).get("shopMoney", {}).get("amount", 0))
+                            total_discount = original_total - discounted_total
+
+                            # Use discounted unit price as the "price"
+                            unit_price = line_item.get("discountedUnitPriceSet", {}).get("shopMoney", {}).get("amount")
+
+                            
                             await cur.execute(
                                 """
                                 INSERT INTO shopify.order_line_items (
-                                    shop_id, line_item_id, order_id, product_id, variant_id,
-                                    title, quantity, sku, variant_title, name,
-                                    price, discount_amount, total_price,
-                                    taxable, requires_shipping, fulfillable_quantity,
-                                    fulfillment_status, currency
+                                    shop_id, order_id, line_number, product_id, variant_id,
+                                    title, quantity,
+                                    price, total_discount, line_total,
                                 ) VALUES (
                                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                                     %s, %s, %s, %s, %s, %s, %s, %s
                                 )
-                                ON CONFLICT (shop_id, line_item_id)
+                                ON CONFLICT (shop_id, order_id, line_number)
                                 DO UPDATE SET
+                                    product_id = EXCLUDED.product_id,
+                                    variant_id = EXCLUDED.variant_id,
+                                    title = EXCLUDED.title,
                                     quantity = EXCLUDED.quantity,
                                     price = EXCLUDED.price,
-                                    discount_amount = EXCLUDED.discount_amount,
-                                    total_price = EXCLUDED.total_price,
-                                    fulfillable_quantity = EXCLUDED.fulfillable_quantity,
-                                    fulfillment_status = EXCLUDED.fulfillment_status
+                                    total_discount = EXCLUDED.total_discount,
+                                    line_total = EXCLUDED.line_total,
                                 """,
                                 (
-                                    shop_id, line_item_id, order_id, product_id, variant_id,
-                                    line_item.get("title"), line_item.get("quantity"),
-                                    line_item.get("sku"), line_item.get("variantTitle"),
-                                    line_item.get("name"),
-                                    line_item.get("originalUnitPriceSet", {}).get("shopMoney", {}).get("amount"),
-                                    float(line_item.get("originalTotalSet", {}).get("shopMoney", {}).get("amount", 0)) - 
-                                    float(line_item.get("discountedTotalSet", {}).get("shopMoney", {}).get("amount", 0)),
-                                    line_item.get("discountedTotalSet", {}).get("shopMoney", {}).get("amount"),
-                                    line_item.get("taxable"), line_item.get("requiresShipping"),
-                                    line_item.get("fulfillableQuantity"),
-                                    line_item.get("fulfillmentStatus"),
-                                    line_item.get("originalUnitPriceSet", {}).get("shopMoney", {}).get("currencyCode", "USD")
+                                    shop_id,
+                                    order_id,
+                                    line_item_id,  # Using line_item_id as line_number (int4)
+                                    product_id,
+                                    variant_id,
+                                    line_item.get("title"),
+                                    line_item.get("quantity"),
+                                    unit_price,
+                                    total_discount,
+                                    discounted_total
                                 )
                             )
                             
