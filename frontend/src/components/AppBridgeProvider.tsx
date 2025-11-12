@@ -1,49 +1,55 @@
-// AppBridgeProvider.tsx
-import { useEffect, useState } from 'react';
+// frontend/src/components/AppBridgeProvider.tsx
+import { useEffect, useState, type PropsWithChildren } from 'react';
 import createApp from '@shopify/app-bridge';
 import type { ClientApplication } from '@shopify/app-bridge';
-import { AppBridgeContext } from '@/hooks/AppBridgeContext';
+import { Banner } from '@shopify/polaris';
+import { AppBridgeContext } from '../hooks/AppBridgeContext';
 
-export function AppBridgeProvider({ children }: { children: React.ReactNode }) {
+export function AppBridgeProvider({ children }: PropsWithChildren) {
   const [app, setApp] = useState<ClientApplication | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    console.log('🏗️ AppBridgeProvider mounting');
-    
-    // Check if we have the Shopify embedded app configuration
-    if (!window.__SHOPIFY_APP__) {
-      console.error('❌ window.__SHOPIFY_APP__ not found - not in embedded context');
-      return;
-    }
-    
-    console.log('📋 Shopify config:', window.__SHOPIFY_APP__);
-    
     try {
-      const appInstance = createApp({
-        apiKey: window.__SHOPIFY_APP__.apiKey,
-        host: window.__SHOPIFY_APP__.host,
-        forceRedirect: true, // Important for embedded apps
-      });
-      
-      setApp(appInstance);
-      console.log('✅ App Bridge initialized');
-      console.log('App instance:', appInstance);
-    } catch (error) {
-      console.error('❌ Failed to create App Bridge:', error);
-    }
-    
-    return () => {
-      console.log('🔥 AppBridgeProvider unmounting!');
-    };
-  }, []);
-  
-  useEffect(() => {
-    console.log('📱 App state changed to:', app);
-  }, [app]);
+      const params = new URLSearchParams(window.location.search);
+      const host = params.get('host');
+      const apiKey = import.meta.env.VITE_SHOPIFY_API_KEY as string | undefined;
 
-  return (
-    <AppBridgeContext.Provider value={app}>
-      {children}
-    </AppBridgeContext.Provider>
-  );
+      if (!apiKey) {
+        setError('Missing Shopify API key configuration. Please check your environment variables.');
+        setLoading(false);
+        return;
+      }
+      if (!host) {
+        setError('Missing required configuration. Please access this app through your Shopify admin.');
+        setLoading(false);
+        return;
+      }
+
+      const appInstance = createApp({ apiKey, host, forceRedirect: true });
+      setApp(appInstance);
+      setError(null);
+    } catch {
+      setError('Failed to initialize App Bridge. Please try refreshing the page.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  if (loading) {
+    return <div style={{ padding: 20, textAlign: 'center' }}>Loading Shopify App Bridge...</div>;
+  }
+
+  if (error) {
+    return (
+      <div style={{ padding: 20 }}>
+        <Banner tone="critical" title="Configuration Error">
+          <p>{error}</p>
+        </Banner>
+      </div>
+    );
+  }
+
+  return <AppBridgeContext.Provider value={app}>{children}</AppBridgeContext.Provider>;
 }
