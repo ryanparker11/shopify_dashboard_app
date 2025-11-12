@@ -9,11 +9,27 @@ export function AppBridgeProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     console.log('🏗️ AppBridgeProvider mounting');
-    if (window.__SHOPIFY_APP__) {
-      const appInstance = createApp(window.__SHOPIFY_APP__);
+    
+    // Check if we have the Shopify embedded app configuration
+    if (!window.__SHOPIFY_APP__) {
+      console.error('❌ window.__SHOPIFY_APP__ not found - not in embedded context');
+      return;
+    }
+    
+    console.log('📋 Shopify config:', window.__SHOPIFY_APP__);
+    
+    try {
+      const appInstance = createApp({
+        apiKey: window.__SHOPIFY_APP__.apiKey,
+        host: window.__SHOPIFY_APP__.host,
+        forceRedirect: true, // Important for embedded apps
+      });
+      
       setApp(appInstance);
-      console.log('App Bridge initialized');
+      console.log('✅ App Bridge initialized');
       console.log('App instance:', appInstance);
+    } catch (error) {
+      console.error('❌ Failed to create App Bridge:', error);
     }
     
     return () => {
