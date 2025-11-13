@@ -1,8 +1,13 @@
 // frontend/src/lib/api.ts
-import { authenticatedFetch as appBridgeAuthenticatedFetch } from '@shopify/app-bridge/utilities';
 import { useAppBridge } from '../hooks/useAppBridge';
+import type { ClientApplication, AppBridgeState } from '@shopify/app-bridge';
 
 const API_BASE = import.meta.env.VITE_API_BASE;
+
+// Extend the ClientApplication type to include idToken method
+interface AppBridgeWithToken extends ClientApplication<AppBridgeState> {
+  idToken: () => Promise<string>;
+}
 
 /**
  * Hook to make authenticated API calls to your backend.
@@ -12,31 +17,48 @@ export const useAuthenticatedFetch = () => {
   const app = useAppBridge();
   
   // Overload signatures for better type inference
-  async function fetch<T = unknown>(
+  async function authenticatedFetch<T = unknown>(
     endpoint: string,
     options?: RequestInit,
     returnRawResponse?: false
   ): Promise<T>;
   
-  async function fetch(
+  async function authenticatedFetch(
     endpoint: string,
     options: RequestInit,
     returnRawResponse: true
   ): Promise<Response>;
   
   // Implementation
-  async function fetch<T = unknown>(
+  async function authenticatedFetch<T = unknown>(
     endpoint: string,
     options: RequestInit = {},
     returnRawResponse = false
   ): Promise<T | Response> {
-    const authenticatedFetch = appBridgeAuthenticatedFetch(app);
     const url = `${API_BASE}${endpoint}`;
     
     try {
-      const response = await authenticatedFetch(url, {
+      // Get session token directly from app with timeout
+      console.log('🔐 Fetching session token...');
+      const tokenStart = performance.now();
+      
+      // Type assertion to include idToken method
+      const appWithToken = app as AppBridgeWithToken;
+      const tokenPromise = appWithToken.idToken();
+      
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Session token timeout after 5 seconds')), 5000);
+      });
+      
+      const token = await Promise.race([tokenPromise, timeoutPromise]);
+      const tokenElapsed = performance.now() - tokenStart;
+      console.log(`✅ Session token received in ${tokenElapsed.toFixed(0)}ms`);
+      
+      // Make the request with the session token
+      const response = await window.fetch(url, {
         ...options,
         headers: {
+          'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
           ...options.headers,
         },
@@ -56,12 +78,12 @@ export const useAuthenticatedFetch = () => {
       
       return await response.json();
     } catch (error) {
-      console.error('API request failed:', error);
+      console.error('💥 API request failed:', error);
       throw error;
     }
   }
   
-  return fetch;
+  return authenticatedFetch;
 };
 
 /**
