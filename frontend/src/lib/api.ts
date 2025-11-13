@@ -33,14 +33,23 @@ export const useAuthenticatedFetch = () => {
     const url = `${API_BASE}${endpoint}`;
     
     try {
-      // Get session token using the correct App Bridge v3 method
+      // Get session token with timeout
       console.log('🔐 Fetching session token...');
       const tokenStart = performance.now();
       
-      const token = await getSessionToken(app);
+      // Add timeout to getSessionToken
+      const tokenPromise = getSessionToken(app);
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => {
+          reject(new Error('Session token timeout after 10 seconds'));
+        }, 10000);
+      });
+      
+      const token = await Promise.race([tokenPromise, timeoutPromise]);
       
       const tokenElapsed = performance.now() - tokenStart;
       console.log(`✅ Session token received in ${tokenElapsed.toFixed(0)}ms`);
+      console.log(`🎫 Token length: ${token.length} characters`);
       
       // Make the request with the session token
       const response = await window.fetch(url, {
@@ -67,6 +76,12 @@ export const useAuthenticatedFetch = () => {
       return await response.json();
     } catch (error) {
       console.error('💥 API request failed:', error);
+      if (error instanceof Error && error.message.includes('timeout')) {
+        console.error('⏰ Session token request timed out - this usually means:');
+        console.error('   1. App Bridge is not fully initialized');
+        console.error('   2. The iframe needs user interaction first');
+        console.error('   3. There might be a CORS or CSP issue');
+      }
       throw error;
     }
   }
