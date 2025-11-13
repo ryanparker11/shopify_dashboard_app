@@ -1,5 +1,5 @@
 // frontend/src/lib/api.ts
-import { getSessionToken } from '@shopify/app-bridge/utilities';
+import { authenticatedFetch as appBridgeAuthenticatedFetch } from '@shopify/app-bridge/utilities';
 import { useAppBridge } from '../hooks/useAppBridge';
 
 const API_BASE = import.meta.env.VITE_API_BASE;
@@ -11,21 +11,24 @@ const API_BASE = import.meta.env.VITE_API_BASE;
 export const useAuthenticatedFetch = () => {
   const app = useAppBridge();
   
+  // Create the authenticated fetch function using App Bridge
+  const authenticatedFetch = appBridgeAuthenticatedFetch(app);
+  
   // Overload signatures for better type inference
-  async function authenticatedFetch<T = unknown>(
+  async function fetch<T = unknown>(
     endpoint: string,
     options?: RequestInit,
     returnRawResponse?: false
   ): Promise<T>;
   
-  async function authenticatedFetch(
+  async function fetch(
     endpoint: string,
     options: RequestInit,
     returnRawResponse: true
   ): Promise<Response>;
   
   // Implementation
-  async function authenticatedFetch<T = unknown>(
+  async function fetch<T = unknown>(
     endpoint: string,
     options: RequestInit = {},
     returnRawResponse = false
@@ -33,33 +36,18 @@ export const useAuthenticatedFetch = () => {
     const url = `${API_BASE}${endpoint}`;
     
     try {
-      // Get session token with timeout
-      console.log('🔐 Fetching session token...');
-      const tokenStart = performance.now();
+      console.log('🚀 Making authenticated request to:', endpoint);
       
-      // Add timeout to getSessionToken
-      const tokenPromise = getSessionToken(app);
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => {
-          reject(new Error('Session token timeout after 10 seconds'));
-        }, 10000);
-      });
-      
-      const token = await Promise.race([tokenPromise, timeoutPromise]);
-      
-      const tokenElapsed = performance.now() - tokenStart;
-      console.log(`✅ Session token received in ${tokenElapsed.toFixed(0)}ms`);
-      console.log(`🎫 Token length: ${token.length} characters`);
-      
-      // Make the request with the session token
-      const response = await window.fetch(url, {
+      // Use App Bridge's authenticatedFetch - it handles session tokens automatically
+      const response = await authenticatedFetch(url, {
         ...options,
         headers: {
-          'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
           ...options.headers,
         },
       });
+      
+      console.log('✅ Response received:', response.status);
       
       // For blob downloads, return the raw response
       if (returnRawResponse) {
@@ -76,17 +64,11 @@ export const useAuthenticatedFetch = () => {
       return await response.json();
     } catch (error) {
       console.error('💥 API request failed:', error);
-      if (error instanceof Error && error.message.includes('timeout')) {
-        console.error('⏰ Session token request timed out - this usually means:');
-        console.error('   1. App Bridge is not fully initialized');
-        console.error('   2. The iframe needs user interaction first');
-        console.error('   3. There might be a CORS or CSP issue');
-      }
       throw error;
     }
   }
   
-  return authenticatedFetch;
+  return fetch;
 };
 
 /**
