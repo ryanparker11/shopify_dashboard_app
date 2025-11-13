@@ -20,6 +20,14 @@ import { useEffect, useRef, useState } from 'react';
 import Plot from 'react-plotly.js';
 import { useAuthenticatedFetch } from './lib/api';
 
+declare global {
+  interface Window {
+    app?: {
+      idToken: () => Promise<string>;
+    };
+  }
+}
+
 interface SyncStatus {
   status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'not_found';
   orders_synced: number;
@@ -61,6 +69,33 @@ function AppContent() {
   // --------------------------------------------------------------------
   // Helpers
   // --------------------------------------------------------------------
+
+  
+  useEffect(() => {
+  if (!shop) return;
+
+  const testSessionToken = async () => {
+    console.log('🧪 Testing session token fetch...');
+    const start = performance.now();
+    
+    try {
+      if (window.app) {
+        const token = await window.app.idToken();
+        const elapsed = performance.now() - start;
+        console.log('✅ Session token received in', elapsed, 'ms');
+        console.log('🎫 Token (first 20 chars):', token.substring(0, 20) + '...');
+      } else {
+        console.error('❌ window.app not found');
+      }
+    } catch (error) {
+      const elapsed = performance.now() - start;
+      console.error('💥 Session token failed after', elapsed, 'ms:', error);
+    }
+  };
+
+  // Test after a delay
+  setTimeout(testSessionToken, 2000);
+}, [shop]);
 
   async function fetchOrdersSummary(shopDomain: string) {
     try {
