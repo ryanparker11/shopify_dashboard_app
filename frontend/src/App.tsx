@@ -76,15 +76,22 @@ function AppContent() {
   const fetchChartData = async (shopName: string) => {
     try {
       console.log('🔍 Fetching charts for shop:', shopName);
+      console.log('🔍 Using authenticatedFetch:', typeof authenticatedFetch);
       
       const data = await authenticatedFetch<ChartsResponse>(
         `/api/charts/${encodeURIComponent(shopName)}`
       );
 
+      console.log('✅ Charts response received:', data);
       console.log('✅ Charts loaded successfully:', data.charts?.length || 0, 'charts');
       setChartData(data.charts || []);
     } catch (error) {
       console.error('💥 Failed to fetch chart data:', error);
+      if (error instanceof Error) {
+      console.error('💥 Error name:', error.name);
+      console.error('💥 Error message:', error.message);
+      console.error('💥 Error stack:', error.stack);
+    }
     }
   };
 
