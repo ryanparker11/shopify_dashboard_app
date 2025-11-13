@@ -10,6 +10,7 @@ import {
     List,
     Divider
 } from '@shopify/polaris';
+import { useAuthenticatedFetch } from '../lib/api';
 
 interface UploadResult {
     success: boolean;
@@ -33,10 +34,10 @@ interface ProfitMetrics {
 
 interface COGSManagementProps {
     shopDomain: string;
-    apiUrl?: string;
+    apiUrl?: string; // Keep for backwards compatibility but won't be used
 }
 
-export function COGSManagement({ shopDomain, apiUrl = '' }: COGSManagementProps) {
+export function COGSManagement({ shopDomain }: COGSManagementProps) {
     const [downloadingTemplate, setDownloadingTemplate] = useState(false);
     const [uploadingFile, setUploadingFile] = useState(false);
     const [uploadResult, setUploadResult] = useState<UploadResult | null>(null);
@@ -44,23 +45,20 @@ export function COGSManagement({ shopDomain, apiUrl = '' }: COGSManagementProps)
     const [profitMetrics, setProfitMetrics] = useState<ProfitMetrics | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
+    // ✅ Use authenticated fetch hook
+    const authenticatedFetch = useAuthenticatedFetch();
+
     // Load profit metrics on component mount and after successful upload
     const fetchProfitMetrics = useCallback(async () => {
         try {
-            const response = await fetch(
-                `${apiUrl}/api/cogs/profit-analysis?shop_domain=${encodeURIComponent(shopDomain)}&days=30`,
-                {
-                    credentials: 'include',
-                }
+            const data = await authenticatedFetch<ProfitMetrics>(
+                `/api/cogs/profit-analysis?shop_domain=${encodeURIComponent(shopDomain)}&days=30`
             );
-            if (response.ok) {
-                const data = await response.json();
-                setProfitMetrics(data);
-            }
+            setProfitMetrics(data);
         } catch (err) {
             console.error('Error fetching profit metrics:', err);
         }
-    }, [apiUrl, shopDomain]);
+    }, [shopDomain, authenticatedFetch]);
 
     useEffect(() => {
         fetchProfitMetrics();
@@ -69,11 +67,11 @@ export function COGSManagement({ shopDomain, apiUrl = '' }: COGSManagementProps)
     const downloadTemplate = async () => {
         setDownloadingTemplate(true);
         try {
-            const response = await fetch(
-                `${apiUrl}/api/cogs/download-template?shop_domain=${encodeURIComponent(shopDomain)}`,
-                {
-                    credentials: 'include',
-                }
+            // Get raw response for blob download (third parameter = true)
+            const response = await authenticatedFetch(
+                `/api/cogs/download-template?shop_domain=${encodeURIComponent(shopDomain)}`,
+                {},
+                true
             );
 
             if (!response.ok) {
@@ -115,13 +113,14 @@ export function COGSManagement({ shopDomain, apiUrl = '' }: COGSManagementProps)
             const formData = new FormData();
             formData.append('file', file);
 
-            const response = await fetch(
-                `${apiUrl}/api/cogs/upload-template?shop_domain=${encodeURIComponent(shopDomain)}`,
+            // For FormData uploads, we need to get the raw response
+            const response = await authenticatedFetch(
+                `/api/cogs/upload-template?shop_domain=${encodeURIComponent(shopDomain)}`,
                 {
                     method: 'POST',
                     body: formData,
-                    credentials: 'include',
-                }
+                },
+                true // Get raw response
             );
 
             const data = await response.json();
