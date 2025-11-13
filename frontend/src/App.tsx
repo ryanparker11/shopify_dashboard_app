@@ -160,49 +160,68 @@ function AppContent() {
 
     setShop(shopParam);
 
-    const checkSyncStatus = async () => {
-      try {
-        console.log('📡 Calling sync-status endpoint');
-        
-        const data = await authenticatedFetch<SyncStatus>(
-          `/auth/sync-status/${encodeURIComponent(shopParam)}`
-        );
+    // App.tsx - In the checkSyncStatus function:
 
-        console.log('📡 Sync-status data:', data);
-        
-        setSyncStatus(data);
-        setIsLoading(false);
-
-        const was = prevStatusRef.current;
-        const now = data.status;
-
-        if (now === 'pending' || now === 'in_progress') {
-          setShowBanner(true);
-        } else if (
-          (was === 'pending' || was === 'in_progress') &&
-          (now === 'completed' || now === 'failed')
-        ) {
-          setShowBanner(true);
-        } else {
-          setShowBanner(false);
-        }
-
-        prevStatusRef.current = now;
-
-        if (data.status === 'completed') {
-          console.log('✅ Sync completed - fetching charts and orders');
-          fetchChartData(shopParam);
-          fetchOrdersSummary(shopParam);
-        }
-
-        if (data.status === 'pending' || data.status === 'in_progress') {
-          setTimeout(checkSyncStatus, 3000);
-        }
-      } catch (error) {
-        console.error('💥 Failed to fetch sync status:', error);
-        setIsLoading(false);
+const checkSyncStatus = async () => {
+  try {
+    console.log('📡 Calling sync-status endpoint');
+    console.log('📡 Shop param:', shopParam);
+    console.log('📡 API URL:', API_URL);
+    
+    // ⚠️ IMPORTANT: Use regular fetch for sync-status (no session token needed)
+    // This endpoint is public and called during initial load
+    const response = await fetch(
+      `${API_URL}/auth/sync-status/${encodeURIComponent(shopParam)}`,
+      {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       }
-    };
+    );
+
+    if (!response.ok) {
+      throw new Error(`Sync status check failed: ${response.status}`);
+    }
+
+    const data: SyncStatus = await response.json();
+    console.log('✅ Sync-status response:', data);
+    
+    setSyncStatus(data);
+    setIsLoading(false);
+
+    const was = prevStatusRef.current;
+    const now = data.status;
+
+    if (now === 'pending' || now === 'in_progress') {
+      setShowBanner(true);
+    } else if (
+      (was === 'pending' || was === 'in_progress') &&
+      (now === 'completed' || now === 'failed')
+    ) {
+      setShowBanner(true);
+    } else {
+      setShowBanner(false);
+    }
+
+    prevStatusRef.current = now;
+
+    if (data.status === 'completed') {
+      console.log('✅ Sync completed - fetching charts and orders');
+      fetchChartData(shopParam);
+      fetchOrdersSummary(shopParam);
+    }
+
+    if (data.status === 'pending' || data.status === 'in_progress') {
+      setTimeout(checkSyncStatus, 3000);
+    }
+  } catch (error) {
+    console.error('💥 Failed to fetch sync status:', error);
+    setIsLoading(false);
+  }
+};
+
+    
 
     // Small delay to ensure App Bridge is initialized
     setTimeout(checkSyncStatus, 500);
