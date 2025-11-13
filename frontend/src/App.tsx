@@ -16,10 +16,9 @@ import '@shopify/polaris/build/esm/styles.css';
 import ShopifyEmbedGate from './components/ShopifyEmbedGate';
 import { AppBridgeProvider } from './components/AppBridgeProvider';
 import { COGSManagement } from './components/COGSManagement';
-import { useEffect, useRef, useState, } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Plot from 'react-plotly.js';
-import { useAppBridge } from '@/hooks/useAppBridge';
-import { getSessionToken } from '@shopify/app-bridge/utilities';
+import { useAuthenticatedFetch } from './lib/api';
 
 interface SyncStatus {
   status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'not_found';
@@ -32,7 +31,15 @@ interface ChartData {
   key?: string;
   data: Plotly.Data[];
   layout: Partial<Plotly.Layout & { title?: string | { text?: string } }>;
-  export_url?: string; // e.g. "/charts/{shop}/export/{key}"
+  export_url?: string;
+}
+
+interface OrdersSummary {
+  total_orders: number;
+}
+
+interface ChartsResponse {
+  charts: ChartData[];
 }
 
 function AppContent() {
@@ -42,59 +49,11 @@ function AppContent() {
   const [totalOrders, setTotalOrders] = useState<number | null>(null);
   const [shop, setShop] = useState<string | null>(null);
 
-  // NEW: control the banner independently
   const [showBanner, setShowBanner] = useState(false);
   const prevStatusRef = useRef<SyncStatus['status'] | null>(null);
 
-  // Get App Bridge instance directly
-  const app = useAppBridge();
-  
-  // Store app in a ref so we always have the latest value
-  const appRef = useRef(app);
-  useEffect(() => {
-    appRef.current = app;
-    console.log('📝 App ref updated to:', app);
-  }, [app]);
-  
-  // Function that reads from ref at call time
-  const authenticatedFetch = async (url: string, options: RequestInit = {}) => {
-    const currentApp = appRef.current; // Read current value from ref
-    
-    console.log('🔐 AUTH FETCH for:', url);
-    console.log('🔐 App available:', !!currentApp);
-    
-    if (!currentApp) {
-      console.warn('⚠️  No app - using regular fetch');
-      return fetch(url, { credentials: 'include', ...options });
-    }
-
-    try {
-      console.log('🔑 Getting token...');
-      
-      // Add timeout to prevent hanging forever
-      const tokenPromise = getSessionToken(currentApp);
-      const timeoutPromise = new Promise<never>((_, reject) => 
-        setTimeout(() => reject(new Error('Token fetch timeout')), 5000)
-      );
-      
-      const token = await Promise.race([tokenPromise, timeoutPromise]);
-      console.log('✅ Got token, length:', token?.length);
-
-      return fetch(url, {
-        credentials: 'include',
-        ...options,
-        headers: {
-          ...options.headers,
-          'Authorization': `Bearer ${token}`,
-        },
-      });
-    } catch (error) {
-      console.error('❌ Token error:', error);
-      console.warn('⚠️  Falling back to regular fetch');
-      // Fallback to regular fetch if token fails
-      return fetch(url, { credentials: 'include', ...options });
-    }
-  };
+  // Use the authenticated fetch hook from api.ts
+  const authenticatedFetch = useAuthenticatedFetch();
 
   const API_URL =
     import.meta.env.VITE_API_URL || 'https://api.lodestaranalytics.io';
@@ -105,15 +64,9 @@ function AppContent() {
 
   async function fetchOrdersSummary(shopDomain: string) {
     try {
-      const res = await authenticatedFetch(
-        `${API_URL}/api/orders/summary?shop_domain=${encodeURIComponent(
-          shopDomain
-        )}`
+      const data = await authenticatedFetch<OrdersSummary>(
+        `/api/orders/summary?shop_domain=${encodeURIComponent(shopDomain)}`
       );
-
-      if (!res.ok) return;
-
-      const data = await res.json();
       setTotalOrders(data.total_orders ?? null);
     } catch (e) {
       console.error('Failed to fetch orders summary:', e);
@@ -123,23 +76,11 @@ function AppContent() {
   const fetchChartData = async (shopName: string) => {
     try {
       console.log('🔍 Fetching charts for shop:', shopName);
-      console.log('🔍 API_URL:', API_URL);
-      console.log('🔍 authenticatedFetch function available:', typeof authenticatedFetch);
       
-      const response = await authenticatedFetch(
-        `${API_URL}/api/charts/${encodeURIComponent(shopName)}`
+      const data = await authenticatedFetch<ChartsResponse>(
+        `/api/charts/${encodeURIComponent(shopName)}`
       );
 
-      console.log('📊 Chart response status:', response.status);
-      console.log('📊 Chart response headers:', Object.fromEntries(response.headers.entries()));
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error(`❌ Charts fetch failed: ${response.status}`, errorText);
-        throw new Error(`Charts fetch failed: ${response.status}`);
-      }
-
-      const data = await response.json();
       console.log('✅ Charts loaded successfully:', data.charts?.length || 0, 'charts');
       setChartData(data.charts || []);
     } catch (error) {
@@ -151,13 +92,13 @@ function AppContent() {
     if (!exportUrl) return null;
 
     if (exportUrl.startsWith('/charts'))
-      return `${API_URL}/api${exportUrl}`;
+      return `/api${exportUrl}`;
 
-    if (exportUrl.startsWith('/api/')) return `${API_URL}${exportUrl}`;
+    if (exportUrl.startsWith('/api/')) return exportUrl;
 
     if (exportUrl.startsWith('http')) return exportUrl;
 
-    return `${API_URL}/api/${exportUrl.replace(/^\/+/, '')}`;
+    return `/api/${exportUrl.replace(/^\/+/, '')}`;
   };
 
   const downloadChart = async (chart: ChartData) => {
@@ -170,19 +111,16 @@ function AppContent() {
 
       console.log('Attempting to download from:', url);
       
-      // Now using authenticatedFetch since backend validates session tokens
-      const res = await authenticatedFetch(url);
+      // Get raw response for blob download (third parameter = true)
+      const response = await authenticatedFetch(url, {}, true);
       
-      console.log('Download response status:', res.status);
-      console.log('Download response headers:', res.headers);
-      
-      if (!res.ok) {
-        const errorText = await res.text();
+      if (!response.ok) {
+        const errorText = await response.text();
         console.error('Download failed with error:', errorText);
-        throw new Error(`Export failed: ${res.status} - ${errorText}`);
+        throw new Error(`Export failed: ${response.status} - ${errorText}`);
       }
 
-      const blob = await res.blob();
+      const blob = await response.blob();
       console.log('Blob created, size:', blob.size, 'type:', blob.type);
 
       const filename = `${chart.key || 'chart'}_${new Date()
@@ -222,67 +160,53 @@ function AppContent() {
 
     setShop(shopParam);
 
-    // IMPORTANT: Wait for App Bridge to be ready before making API calls
-    // We need a small delay to ensure App Bridge is fully set up
-    const initializeData = async () => {
-      // Wait a bit for App Bridge to initialize
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
-      console.log('🚀 Starting data initialization after App Bridge delay');
-      
-      const checkSyncStatus = async () => {
-        try {
-          console.log('📡 Calling sync-status endpoint');
-          
-          // Now using authenticatedFetch since backend validates session tokens
-          const response = await authenticatedFetch(
-            `${API_URL}/auth/sync-status/${encodeURIComponent(shopParam)}`
-          );
+    const checkSyncStatus = async () => {
+      try {
+        console.log('📡 Calling sync-status endpoint');
+        
+        const data = await authenticatedFetch<SyncStatus>(
+          `/auth/sync-status/${encodeURIComponent(shopParam)}`
+        );
 
-          console.log('📡 Sync-status response:', response.status);
+        console.log('📡 Sync-status data:', data);
+        
+        setSyncStatus(data);
+        setIsLoading(false);
 
-          const data: SyncStatus = await response.json();
-          console.log('📡 Sync-status data:', data);
-          
-          setSyncStatus(data);
-          setIsLoading(false);
+        const was = prevStatusRef.current;
+        const now = data.status;
 
-          const was = prevStatusRef.current;
-          const now = data.status;
-
-          if (now === 'pending' || now === 'in_progress') {
-            setShowBanner(true);
-          } else if (
-            (was === 'pending' || was === 'in_progress') &&
-            (now === 'completed' || now === 'failed')
-          ) {
-            setShowBanner(true);
-          } else {
-            setShowBanner(false);
-          }
-
-          prevStatusRef.current = now;
-
-          if (data.status === 'completed') {
-            console.log('✅ Sync completed - fetching charts and orders');
-            fetchChartData(shopParam);
-            fetchOrdersSummary(shopParam);
-          }
-
-          if (data.status === 'pending' || data.status === 'in_progress') {
-            setTimeout(checkSyncStatus, 3000);
-          }
-        } catch (error) {
-          console.error('💥 Failed to fetch sync status:', error);
-          setIsLoading(false);
+        if (now === 'pending' || now === 'in_progress') {
+          setShowBanner(true);
+        } else if (
+          (was === 'pending' || was === 'in_progress') &&
+          (now === 'completed' || now === 'failed')
+        ) {
+          setShowBanner(true);
+        } else {
+          setShowBanner(false);
         }
-      };
 
-      checkSyncStatus();
+        prevStatusRef.current = now;
+
+        if (data.status === 'completed') {
+          console.log('✅ Sync completed - fetching charts and orders');
+          fetchChartData(shopParam);
+          fetchOrdersSummary(shopParam);
+        }
+
+        if (data.status === 'pending' || data.status === 'in_progress') {
+          setTimeout(checkSyncStatus, 3000);
+        }
+      } catch (error) {
+        console.error('💥 Failed to fetch sync status:', error);
+        setIsLoading(false);
+      }
     };
 
-    initializeData();
-  }, []); // Remove authenticatedFetch dependency since checkSyncStatus uses regular fetch
+    // Small delay to ensure App Bridge is initialized
+    setTimeout(checkSyncStatus, 500);
+  }, [authenticatedFetch]);
 
   // --------------------------------------------------------------------
   // Effect: optimized order-count refresh (focus-based polling)
@@ -304,7 +228,7 @@ function AppContent() {
       window.removeEventListener('focus', onFocus);
       clearInterval(intervalId);
     };
-  }, [shop]); // authenticatedFetch is stable and doesn't need to be in dependencies
+  }, [shop, authenticatedFetch]);
 
   // --------------------------------------------------------------------
   // Rendering helpers

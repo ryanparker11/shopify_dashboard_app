@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import os, uvicorn, math, logging
-from fastapi import FastAPI, Request, Depends               # CHANGED: add Depends
+from fastapi import FastAPI, Request, Depends
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
@@ -16,13 +16,13 @@ from commerce_app.auth.shopify_oauth import router as shopify_auth
 from commerce_app.core.routers import cogs
 from commerce_app.core.routers.gdpr_webhooks import router as gdpr_router
 
-# ★ NEW: session token verifier
-from commerce_app.auth.session_tokens import verify_shopify_session_token   # ADDED
+# Session token verifier
+from commerce_app.auth.session_tokens import verify_shopify_session_token
 
 app = FastAPI()
 templates = Jinja2Templates(directory="commerce_app/ui")
 
-# ADD THIS: Security headers middleware for Shopify embedding
+# Security headers middleware for Shopify embedding
 from starlette.middleware.base import BaseHTTPMiddleware
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -60,35 +60,45 @@ app.include_router(
     analytics_router,
     prefix="/api",
     tags=["analytics"],
-    dependencies=[Depends(verify_shopify_session_token)]      # ADDED
+    dependencies=[Depends(verify_shopify_session_token)]
 )
 
 app.include_router(
     cogs.router,
     prefix="/api",
     tags=["cogs"],
-    dependencies=[Depends(verify_shopify_session_token)]      # ADDED
+    dependencies=[Depends(verify_shopify_session_token)]
 )
 
 # ❗ Do NOT protect webhooks with session tokens (they use HMAC headers)
 app.include_router(webhooks.router, prefix="/webhooks", tags=["webhooks"])
 app.include_router(gdpr_router, prefix="/webhooks", tags=["gdpr"])
 
-# ❗ OAuth routes must remain public
+# ❗ OAuth routes and health checks must remain public
 app.include_router(health.router)
-app.include_router(shopify_auth)
+app.include_router(shopify_auth)  # OAuth routes at /auth/*
 
 @app.get("/healthz")
 def healthz():
     return {"status": "ok"}
 
-# --- Optional: a simple protected probe reviewers can hit from your UI ---
-@app.get("/api/me", tags=["auth-probe"], dependencies=[Depends(verify_shopify_session_token)])  # ADDED
+# Optional: protected endpoint to verify session tokens are working
+@app.get("/api/me", tags=["auth-probe"])
 def me(payload = Depends(verify_shopify_session_token)):
-    # payload["sub"] is the shop's numeric id; dest is the shop URL
-    return {"ok": True, "shop": payload.get("dest"), "sub": payload.get("sub")}
+    """
+    Test endpoint to verify session token authentication is working.
+    Returns shop info from the verified token.
+    """
+    dest = payload.get("dest", "")
+    shop = dest.replace("https://", "").split("/")[0]
+    return {
+        "ok": True, 
+        "shop": shop,
+        "shop_id": payload.get("sub"),
+        "user_id": payload.get("sub")  # The Shopify user ID
+    }
 
-# at bottom of commerce_app/app.py
+# Logging routes
 for r in app.routes:
     logging.warning("ROUTE %s %s", getattr(r, "path", ""), getattr(r, "methods", ""))
 
