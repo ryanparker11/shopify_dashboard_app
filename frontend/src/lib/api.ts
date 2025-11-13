@@ -1,13 +1,8 @@
 // frontend/src/lib/api.ts
+import { getSessionToken } from '@shopify/app-bridge/utilities';
 import { useAppBridge } from '../hooks/useAppBridge';
-import type { ClientApplication, AppBridgeState } from '@shopify/app-bridge';
 
 const API_BASE = import.meta.env.VITE_API_BASE;
-
-// Extend the ClientApplication type to include idToken method
-interface AppBridgeWithToken extends ClientApplication<AppBridgeState> {
-  idToken: () => Promise<string>;
-}
 
 /**
  * Hook to make authenticated API calls to your backend.
@@ -38,19 +33,12 @@ export const useAuthenticatedFetch = () => {
     const url = `${API_BASE}${endpoint}`;
     
     try {
-      // Get session token directly from app with timeout
+      // Get session token using the correct App Bridge v3 method
       console.log('🔐 Fetching session token...');
       const tokenStart = performance.now();
       
-      // Type assertion to include idToken method
-      const appWithToken = app as AppBridgeWithToken;
-      const tokenPromise = appWithToken.idToken();
+      const token = await getSessionToken(app);
       
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('Session token timeout after 5 seconds')), 5000);
-      });
-      
-      const token = await Promise.race([tokenPromise, timeoutPromise]);
       const tokenElapsed = performance.now() - tokenStart;
       console.log(`✅ Session token received in ${tokenElapsed.toFixed(0)}ms`);
       
