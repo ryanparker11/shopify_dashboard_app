@@ -1,4 +1,4 @@
-// AppBridgeContext.ts
+// frontend/src/contexts/AppBridgeContext.ts
 import { createContext } from 'react';
 import type { ClientApplication, AppBridgeState } from '@shopify/app-bridge';
 
