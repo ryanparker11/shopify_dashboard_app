@@ -160,72 +160,84 @@ function AppContent() {
 
     setShop(shopParam);
 
-    // App.tsx - In the checkSyncStatus function:
+    let isCancelled = false; // Cleanup flag
 
-const checkSyncStatus = async () => {
-  try {
-    console.log('📡 Calling sync-status endpoint');
-    console.log('📡 Shop param:', shopParam);
-    console.log('📡 API URL:', API_URL);
-    
-    // ⚠️ IMPORTANT: Use regular fetch for sync-status (no session token needed)
-    // This endpoint is public and called during initial load
-    const response = await fetch(
-      `${API_URL}/auth/sync-status/${encodeURIComponent(shopParam)}`,
-      {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+    const checkSyncStatus = async () => {
+      if (isCancelled) return; // Don't proceed if cancelled
+
+      try {
+        console.log('📡 Calling sync-status endpoint');
+        console.log('📡 Shop param:', shopParam);
+        console.log('📡 API URL:', API_URL);
+        
+        // ⚠️ IMPORTANT: Use regular fetch for sync-status (no session token needed)
+        // This endpoint is public and called during initial load
+        const response = await fetch(
+          `${API_URL}/auth/sync-status/${encodeURIComponent(shopParam)}`,
+          {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+          }
+        );
+
+        if (!response.ok) {
+          throw new Error(`Sync status check failed: ${response.status}`);
+        }
+
+        const data: SyncStatus = await response.json();
+        console.log('✅ Sync-status response:', data);
+        
+        if (isCancelled) return; // Don't update state if cancelled
+        
+        setSyncStatus(data);
+        setIsLoading(false);
+
+        const was = prevStatusRef.current;
+        const now = data.status;
+
+        if (now === 'pending' || now === 'in_progress') {
+          setShowBanner(true);
+        } else if (
+          (was === 'pending' || was === 'in_progress') &&
+          (now === 'completed' || now === 'failed')
+        ) {
+          setShowBanner(true);
+        } else {
+          setShowBanner(false);
+        }
+
+        prevStatusRef.current = now;
+
+        // Only fetch charts/orders ONCE when transitioning to completed
+        if (data.status === 'completed' && was !== 'completed') {
+          console.log('✅ Sync completed - fetching charts and orders');
+          fetchChartData(shopParam);
+          fetchOrdersSummary(shopParam);
+        }
+
+        // Only continue polling if still in progress
+        if (data.status === 'pending' || data.status === 'in_progress') {
+          setTimeout(checkSyncStatus, 3000);
+        }
+      } catch (error) {
+        console.error('💥 Failed to fetch sync status:', error);
+        if (!isCancelled) {
+          setIsLoading(false);
+        }
       }
-    );
-
-    if (!response.ok) {
-      throw new Error(`Sync status check failed: ${response.status}`);
-    }
-
-    const data: SyncStatus = await response.json();
-    console.log('✅ Sync-status response:', data);
-    
-    setSyncStatus(data);
-    setIsLoading(false);
-
-    const was = prevStatusRef.current;
-    const now = data.status;
-
-    if (now === 'pending' || now === 'in_progress') {
-      setShowBanner(true);
-    } else if (
-      (was === 'pending' || was === 'in_progress') &&
-      (now === 'completed' || now === 'failed')
-    ) {
-      setShowBanner(true);
-    } else {
-      setShowBanner(false);
-    }
-
-    prevStatusRef.current = now;
-
-    if (data.status === 'completed') {
-      console.log('✅ Sync completed - fetching charts and orders');
-      fetchChartData(shopParam);
-      fetchOrdersSummary(shopParam);
-    }
-
-    if (data.status === 'pending' || data.status === 'in_progress') {
-      setTimeout(checkSyncStatus, 3000);
-    }
-  } catch (error) {
-    console.error('💥 Failed to fetch sync status:', error);
-    setIsLoading(false);
-  }
-};
-
-    
+    };
 
     // Small delay to ensure App Bridge is initialized
-    setTimeout(checkSyncStatus, 500);
-  }, [authenticatedFetch]);
+    const timeoutId = setTimeout(checkSyncStatus, 500);
+
+    // Cleanup function
+    return () => {
+      isCancelled = true;
+      clearTimeout(timeoutId);
+    };
+  }, []); // EMPTY DEPENDENCY ARRAY - only run once on mount
 
   // --------------------------------------------------------------------
   // Effect: optimized order-count refresh (focus-based polling)
@@ -236,6 +248,7 @@ const checkSyncStatus = async () => {
 
     const refresh = () => fetchOrdersSummary(shop);
 
+    // Initial fetch
     refresh();
 
     const onFocus = () => refresh();
@@ -247,7 +260,7 @@ const checkSyncStatus = async () => {
       window.removeEventListener('focus', onFocus);
       clearInterval(intervalId);
     };
-  }, [shop, authenticatedFetch]);
+  }, [shop]); // ONLY shop in dependencies, not authenticatedFetch
 
   // --------------------------------------------------------------------
   // Rendering helpers
