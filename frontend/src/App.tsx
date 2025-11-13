@@ -160,18 +160,36 @@ function AppContent() {
 
     setShop(shopParam);
 
-    let isCancelled = false; // Cleanup flag
+    let isCancelled = false;
+
+    // Wait for App Bridge to be fully initialized
+    const waitForAppBridge = () => {
+      return new Promise<void>((resolve) => {
+        const checkInterval = setInterval(() => {
+          if (window.__SHOPIFY_APP__) {
+            clearInterval(checkInterval);
+            console.log('✅ App Bridge confirmed ready');
+            resolve();
+          }
+        }, 100);
+
+        // Timeout after 10 seconds
+        setTimeout(() => {
+          clearInterval(checkInterval);
+          console.warn('⚠️ App Bridge timeout - proceeding anyway');
+          resolve();
+        }, 10000);
+      });
+    };
 
     const checkSyncStatus = async () => {
-      if (isCancelled) return; // Don't proceed if cancelled
+      if (isCancelled) return;
 
       try {
         console.log('📡 Calling sync-status endpoint');
         console.log('📡 Shop param:', shopParam);
         console.log('📡 API URL:', API_URL);
-        
-        // ⚠️ IMPORTANT: Use regular fetch for sync-status (no session token needed)
-        // This endpoint is public and called during initial load
+      
         const response = await fetch(
           `${API_URL}/auth/sync-status/${encodeURIComponent(shopParam)}`,
           {
@@ -188,9 +206,9 @@ function AppContent() {
 
         const data: SyncStatus = await response.json();
         console.log('✅ Sync-status response:', data);
-        
-        if (isCancelled) return; // Don't update state if cancelled
-        
+      
+        if (isCancelled) return;
+      
         setSyncStatus(data);
         setIsLoading(false);
 
@@ -210,14 +228,28 @@ function AppContent() {
 
         prevStatusRef.current = now;
 
-        // Only fetch charts/orders ONCE when transitioning to completed
+        // Only fetch charts/orders when transitioning to completed AND App Bridge is ready
         if (data.status === 'completed' && was !== 'completed') {
-          console.log('✅ Sync completed - fetching charts and orders');
-          fetchChartData(shopParam);
-          fetchOrdersSummary(shopParam);
+          console.log('✅ Sync completed - waiting for App Bridge before fetching data');
+        
+          // Wait for App Bridge to be ready before making authenticated requests
+          await waitForAppBridge();
+        
+          if (!isCancelled) {
+            console.log('✅ App Bridge ready - fetching charts and orders');
+            try {
+              await Promise.all([
+                fetchChartData(shopParam),
+                fetchOrdersSummary(shopParam)
+              ]);
+              console.log('✅ All data fetched successfully');
+            } catch (error) {
+              console.error('💥 Error fetching data:', error);
+            }
+          }
         }
 
-        // Only continue polling if still in progress
+        // Continue polling if still in progress
         if (data.status === 'pending' || data.status === 'in_progress') {
           setTimeout(checkSyncStatus, 3000);
         }
@@ -229,15 +261,18 @@ function AppContent() {
       }
     };
 
-    // Small delay to ensure App Bridge is initialized
-    const timeoutId = setTimeout(checkSyncStatus, 500);
+    // Wait for App Bridge, then start checking sync status
+    waitForAppBridge().then(() => {
+      if (!isCancelled) {
+        checkSyncStatus();
+      }
+    });
 
-    // Cleanup function
+    // Cleanup
     return () => {
       isCancelled = true;
-      clearTimeout(timeoutId);
     };
-  }, []); // EMPTY DEPENDENCY ARRAY - only run once on mount
+  }, []);
 
   // --------------------------------------------------------------------
   // Effect: optimized order-count refresh (focus-based polling)
