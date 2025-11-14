@@ -4,22 +4,19 @@ import { useAppBridge } from '../hooks/useAppBridge';
 
 const API_BASE = import.meta.env.VITE_API_BASE;
 
-// Extend Window interface for the test function
 declare global {
   interface Window {
     testGetToken?: () => Promise<string>;
   }
 }
 
-// Store app instance globally for testing
 let globalAppInstance: ReturnType<typeof useAppBridge> | null = null;
 
-// Cache for session token
-let cachedToken: string | null = null;
-
+// Token fetching state
+let tokenFetchPromise: Promise<string> | null = null;
 
 /**
- * Get session token from URL params (Shopify sends this on initial load)
+ * Get session token from URL params (fallback only)
  */
 function getTokenFromUrl(): string | null {
   const params = new URLSearchParams(window.location.search);
@@ -27,152 +24,114 @@ function getTokenFromUrl(): string | null {
 }
 
 /**
- * Check if a JWT token is expired
- */
-function isTokenExpired(token: string): boolean {
-  try {
-    const payload = JSON.parse(atob(token.split('.')[1]));
-    const exp = payload.exp * 1000; // Convert to milliseconds
-    return Date.now() >= exp - 10000; // 10 second buffer
-  } catch {
-    return true;
-  }
-}
-
-/**
- * Get a valid session token (from cache, URL, or App Bridge)
+ * Get a fresh session token from App Bridge with request queuing
+ * Ensures only ONE token fetch happens at a time
  */
 async function getValidToken(app: ReturnType<typeof useAppBridge>): Promise<string> {
-  // Check if we have a valid cached token
-  if (cachedToken && !isTokenExpired(cachedToken)) {
-    console.log('✅ Using cached token');
-    return cachedToken;
+  // If a token fetch is already in progress, wait for it
+  if (tokenFetchPromise) {
+    console.log('⏳ Token fetch already in progress, waiting...');
+    try {
+      return await tokenFetchPromise;
+    } catch {
+      // If the in-progress fetch failed, we'll try again below
+      console.log('⚠️ Previous token fetch failed, retrying...');
+    }
   }
-  
-  // Try to get token from URL first (Shopify sends this on initial load)
+
+  // Try URL token first (fastest, no iframe communication needed)
   const urlToken = getTokenFromUrl();
-  if (urlToken && !isTokenExpired(urlToken)) {
-    console.log('✅ Using token from URL');
-    cachedToken = urlToken;
+  if (urlToken) {
+    console.log('✅ Using URL token');
     return urlToken;
   }
+
+  // Start a new token fetch
+  console.log('🔐 Fetching fresh token from App Bridge...');
   
-  // Try to get from App Bridge with timeout
-  console.log('🔐 Fetching new token from App Bridge...');
-  try {
-    const token = await Promise.race([
-      getSessionToken(app),
-      new Promise<never>((_, reject) => 
-        setTimeout(() => reject(new Error('Token fetch timeout after 5s')), 5000)
-      )
-    ]);
-    
-    console.log('✅ Token received from App Bridge');
-    cachedToken = token;
-    return token;
-  } catch (error) {
-    console.error('❌ Failed to get token from App Bridge:', error);
-    throw new Error('Unable to authenticate: Session token unavailable');
-  }
+  tokenFetchPromise = (async () => {
+    try {
+      const token = await Promise.race([
+        getSessionToken(app),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Token fetch timeout after 8s')), 8000)
+        )
+      ]);
+
+      console.log('✅ Fresh token received from App Bridge');
+      return token;
+    } finally {
+      // Clear the promise after completion (success or failure)
+      // Use setTimeout to avoid clearing before other callers get the result
+      setTimeout(() => {
+        tokenFetchPromise = null;
+      }, 100);
+    }
+  })();
+
+  return tokenFetchPromise;
 }
 
-// Standalone test function - available immediately
+// Test function
 export const testGetToken = async () => {
   if (!globalAppInstance) {
-    console.error('❌ TEST: App Bridge not initialized yet. Navigate to the app first, then try again.');
+    console.error('❌ TEST: App Bridge not initialized yet.');
     throw new Error('App Bridge not initialized');
   }
-  
-  console.log('🧪 TEST: Attempting to get session token manually...');
+
+  console.log('🧪 TEST: Attempting to get session token...');
   const start = performance.now();
-  
+
   try {
     const token = await getValidToken(globalAppInstance);
     const elapsed = performance.now() - start;
-    
+
     console.log('✅ TEST: Token received successfully!');
     console.log(`⏱️  TEST: Time taken: ${elapsed.toFixed(0)}ms`);
     console.log(`📏 TEST: Token length: ${token.length} characters`);
-    console.log(`🎫 TEST: Token preview: ${token.substring(0, 50)}...`);
-    
-    // Decode and show expiry
-    try {
-      const payload = JSON.parse(atob(token.split('.')[1]));
-      const exp = new Date(payload.exp * 1000);
-      console.log(`⏰ TEST: Token expires at: ${exp.toLocaleString()}`);
-    } catch {
-      console.log('⚠️  Could not decode token expiry');
-    }
-    
+
     return token;
   } catch (error) {
     const elapsed = performance.now() - start;
-    console.error(`❌ TEST: Token fetch failed after ${elapsed.toFixed(0)}ms`);
-    console.error('❌ TEST: Error:', error);
+    console.error(`❌ TEST: Failed after ${elapsed.toFixed(0)}ms`, error);
     throw error;
   }
 };
 
-console.log('🔧 api.ts module loaded - about to set window.testGetToken');
-
-// Expose test function globally
 window.testGetToken = testGetToken;
 
-console.log('🔧 window.testGetToken set:', typeof window.testGetToken);
-
-/**
- * Hook to make authenticated API calls to your backend.
- * Manually adds session token to Authorization header.
- */
 export const useAuthenticatedFetch = () => {
-  console.log('🎣 useAuthenticatedFetch hook called');
-  
   const app = useAppBridge();
-  
-  console.log('🎣 App Bridge instance received:', app);
-  
-  // Store app instance globally for testing
   globalAppInstance = app;
-  
-  console.log('🎣 globalAppInstance set, can now use window.testGetToken()');
-  
-  // Overload signatures for better type inference
+
   async function fetch<T = unknown>(
     endpoint: string,
     options?: RequestInit,
     returnRawResponse?: false
   ): Promise<T>;
-  
+
   async function fetch(
     endpoint: string,
     options: RequestInit,
     returnRawResponse: true
   ): Promise<Response>;
-  
-  // Implementation
+
   async function fetch<T = unknown>(
     endpoint: string,
     options: RequestInit = {},
     returnRawResponse = false
   ): Promise<T | Response> {
     const url = `${API_BASE}${endpoint}`;
-    
+
     try {
       console.log('🚀 Making authenticated request to:', endpoint);
-      console.log('📍 Full URL:', url);
-      
-      // Get session token with fallback strategies
-      console.log('🔐 Getting session token...');
+
+      // Get FRESH session token for this request (with queuing)
       const tokenStart = performance.now();
-      
       const token = await getValidToken(app);
-      
       const tokenElapsed = performance.now() - tokenStart;
       console.log(`✅ Token retrieved in ${tokenElapsed.toFixed(0)}ms`);
-      
-      // Make request with manual Authorization header
-      const requestStart = performance.now();
-      
+
       const response = await window.fetch(url, {
         ...options,
         headers: {
@@ -181,62 +140,50 @@ export const useAuthenticatedFetch = () => {
           ...options.headers,
         },
       });
-      
-      const requestElapsed = performance.now() - requestStart;
-      console.log(`✅ Response received in ${requestElapsed.toFixed(0)}ms:`, response.status);
-      
-      // For blob downloads, return the raw response
+
+      console.log(`✅ Response: ${response.status}`);
+
       if (returnRawResponse) {
         return response;
       }
-      
+
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ 
-          detail: `Request failed with status ${response.status}` 
+        const errorData = await response.json().catch(() => ({
+          detail: `Request failed with status ${response.status}`
         }));
-        console.error('❌ Request failed:', errorData);
         throw new Error(errorData.detail || errorData.message || 'Request failed');
       }
-      
-      const data = await response.json();
-      console.log('✅ Data received successfully');
-      return data;
+
+      return await response.json();
     } catch (error) {
       console.error('💥 API request failed:', error);
-      if (error instanceof Error) {
-        console.error('💥 Error message:', error.message);
-        console.error('💥 Error stack:', error.stack);
-      }
       throw error;
     }
   }
-  
+
   return fetch;
 };
 
-/**
- * Helper hook for common HTTP methods
- */
 export const useApi = () => {
   const authenticatedFetch = useAuthenticatedFetch();
 
   return {
-    get: <T = unknown>(endpoint: string) => 
+    get: <T = unknown>(endpoint: string) =>
       authenticatedFetch<T>(endpoint, { method: 'GET' }),
-    
-    post: <T = unknown>(endpoint: string, data?: unknown) => 
+
+    post: <T = unknown>(endpoint: string, data?: unknown) =>
       authenticatedFetch<T>(endpoint, {
         method: 'POST',
         body: JSON.stringify(data),
       }),
-    
-    put: <T = unknown>(endpoint: string, data?: unknown) => 
+
+    put: <T = unknown>(endpoint: string, data?: unknown) =>
       authenticatedFetch<T>(endpoint, {
         method: 'PUT',
         body: JSON.stringify(data),
       }),
-    
-    delete: <T = unknown>(endpoint: string) => 
+
+    delete: <T = unknown>(endpoint: string) =>
       authenticatedFetch<T>(endpoint, { method: 'DELETE' }),
   };
 };
