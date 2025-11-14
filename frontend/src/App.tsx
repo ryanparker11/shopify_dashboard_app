@@ -20,14 +20,6 @@ import { useEffect, useRef, useState } from 'react';
 import Plot from 'react-plotly.js';
 import { useAuthenticatedFetch } from './lib/api';
 
-declare global {
-  interface Window {
-    app?: {
-      idToken: () => Promise<string>;
-    };
-  }
-}
-
 interface SyncStatus {
   status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'not_found';
   orders_synced: number;
@@ -70,33 +62,6 @@ function AppContent() {
   // Helpers
   // --------------------------------------------------------------------
 
-  
-  useEffect(() => {
-  if (!shop) return;
-
-  const testSessionToken = async () => {
-    console.log('🧪 Testing session token fetch...');
-    const start = performance.now();
-    
-    try {
-      if (window.app) {
-        const token = await window.app.idToken();
-        const elapsed = performance.now() - start;
-        console.log('✅ Session token received in', elapsed, 'ms');
-        console.log('🎫 Token (first 20 chars):', token.substring(0, 20) + '...');
-      } else {
-        console.error('❌ window.app not found');
-      }
-    } catch (error) {
-      const elapsed = performance.now() - start;
-      console.error('💥 Session token failed after', elapsed, 'ms:', error);
-    }
-  };
-
-  // Test after a delay
-  setTimeout(testSessionToken, 2000);
-}, [shop]);
-
   async function fetchOrdersSummary(shopDomain: string) {
     try {
       const data = await authenticatedFetch<OrdersSummary>(
@@ -111,22 +76,22 @@ function AppContent() {
   const fetchChartData = async (shopName: string) => {
     try {
       console.log('🔍 Fetching charts for shop:', shopName);
-      console.log('🔍 Using authenticatedFetch:', typeof authenticatedFetch);
       
       const data = await authenticatedFetch<ChartsResponse>(
         `/api/charts/${encodeURIComponent(shopName)}`
       );
 
-      console.log('✅ Charts response received:', data);
       console.log('✅ Charts loaded successfully:', data.charts?.length || 0, 'charts');
       setChartData(data.charts || []);
     } catch (error) {
       console.error('💥 Failed to fetch chart data:', error);
       if (error instanceof Error) {
-      console.error('💥 Error name:', error.name);
-      console.error('💥 Error message:', error.message);
-      console.error('💥 Error stack:', error.stack);
-    }
+        console.error('💥 Error name:', error.name);
+        console.error('💥 Error message:', error.message);
+        console.error('💥 Error stack:', error.stack);
+      }
+      // Set empty charts on error
+      setChartData([]);
     }
   };
 
@@ -203,24 +168,34 @@ function AppContent() {
     setShop(shopParam);
 
     let isCancelled = false;
+    let checkInterval: number | null = null;
+    let timeoutId: number | null = null;
 
     // Wait for App Bridge to be fully initialized
     const waitForAppBridge = () => {
       return new Promise<void>((resolve) => {
-        const checkInterval = setInterval(() => {
+        // If already initialized, resolve immediately
+        if (window.__SHOPIFY_APP__) {
+          console.log('✅ App Bridge already ready');
+          resolve();
+          return;
+        }
+
+        checkInterval = setInterval(() => {
           if (window.__SHOPIFY_APP__) {
-            clearInterval(checkInterval);
+            if (checkInterval) clearInterval(checkInterval);
+            if (timeoutId) clearTimeout(timeoutId);
             console.log('✅ App Bridge confirmed ready');
             resolve();
           }
         }, 100);
 
-        // Timeout after 10 seconds
-        setTimeout(() => {
-          clearInterval(checkInterval);
+        // Timeout after 5 seconds
+        timeoutId = setTimeout(() => {
+          if (checkInterval) clearInterval(checkInterval);
           console.warn('⚠️ App Bridge timeout - proceeding anyway');
           resolve();
-        }, 10000);
+        }, 5000);
       });
     };
 
@@ -270,15 +245,11 @@ function AppContent() {
 
         prevStatusRef.current = now;
 
-        // Only fetch charts/orders when transitioning to completed AND App Bridge is ready
+        // Only fetch charts/orders when transitioning to completed
         if (data.status === 'completed' && was !== 'completed') {
-          console.log('✅ Sync completed - waiting for App Bridge before fetching data');
-        
-          // Wait for App Bridge to be ready before making authenticated requests
-          await waitForAppBridge();
+          console.log('✅ Sync completed - fetching charts and orders');
         
           if (!isCancelled) {
-            console.log('✅ App Bridge ready - fetching charts and orders');
             try {
               await Promise.all([
                 fetchChartData(shopParam),
@@ -303,7 +274,7 @@ function AppContent() {
       }
     };
 
-    // Wait for App Bridge, then start checking sync status
+    // Wait for App Bridge ONCE, then start checking sync status
     waitForAppBridge().then(() => {
       if (!isCancelled) {
         checkSyncStatus();
@@ -313,6 +284,8 @@ function AppContent() {
     // Cleanup
     return () => {
       isCancelled = true;
+      if (checkInterval) clearInterval(checkInterval);
+      if (timeoutId) clearTimeout(timeoutId);
     };
   }, []);
 
@@ -337,7 +310,7 @@ function AppContent() {
       window.removeEventListener('focus', onFocus);
       clearInterval(intervalId);
     };
-  }, [shop]); // ONLY shop in dependencies, not authenticatedFetch
+  }, [shop]);
 
   // --------------------------------------------------------------------
   // Rendering helpers
@@ -511,7 +484,7 @@ function AppContent() {
           {/* COGS module */}
           {shop && syncStatus?.status === 'completed' && (
             <div style={{ marginTop: '20px' }}>
-              <COGSManagement shopDomain={shop} apiUrl={API_URL} />
+              <COGSManagement shopDomain={shop} />
             </div>
           )}
 

@@ -1,8 +1,16 @@
 // frontend/src/lib/api.ts
 import { authenticatedFetch as appBridgeAuthenticatedFetch } from '@shopify/app-bridge/utilities';
+import { getSessionToken } from '@shopify/app-bridge/utilities';
 import { useAppBridge } from '../hooks/useAppBridge';
 
 const API_BASE = import.meta.env.VITE_API_BASE;
+
+// Extend Window interface for the test function
+declare global {
+  interface Window {
+    testGetToken?: () => Promise<string>;
+  }
+}
 
 /**
  * Hook to make authenticated API calls to your backend.
@@ -13,6 +21,32 @@ export const useAuthenticatedFetch = () => {
   
   // Create the authenticated fetch function using App Bridge
   const authenticatedFetch = appBridgeAuthenticatedFetch(app);
+  
+  // Test function to manually get token
+  const testGetToken = async () => {
+    console.log('🧪 TEST: Attempting to get session token manually...');
+    const start = performance.now();
+    
+    try {
+      const token = await getSessionToken(app);
+      const elapsed = performance.now() - start;
+      
+      console.log('✅ TEST: Token received successfully!');
+      console.log(`⏱️  TEST: Time taken: ${elapsed.toFixed(0)}ms`);
+      console.log(`📏 TEST: Token length: ${token.length} characters`);
+      console.log(`🎫 TEST: Token preview: ${token.substring(0, 50)}...`);
+      
+      return token;
+    } catch (error) {
+      const elapsed = performance.now() - start;
+      console.error(`❌ TEST: Token fetch failed after ${elapsed.toFixed(0)}ms`);
+      console.error('❌ TEST: Error:', error);
+      throw error;
+    }
+  };
+  
+  // Expose test function globally for debugging
+  window.testGetToken = testGetToken;
   
   // Overload signatures for better type inference
   async function fetch<T = unknown>(
@@ -37,6 +71,11 @@ export const useAuthenticatedFetch = () => {
     
     try {
       console.log('🚀 Making authenticated request to:', endpoint);
+      console.log('📍 Full URL:', url);
+      
+      // Test getting token before the request
+      console.log('🔐 About to call authenticatedFetch...');
+      const requestStart = performance.now();
       
       // Use App Bridge's authenticatedFetch - it handles session tokens automatically
       const response = await authenticatedFetch(url, {
@@ -47,7 +86,8 @@ export const useAuthenticatedFetch = () => {
         },
       });
       
-      console.log('✅ Response received:', response.status);
+      const requestElapsed = performance.now() - requestStart;
+      console.log(`✅ Response received in ${requestElapsed.toFixed(0)}ms:`, response.status);
       
       // For blob downloads, return the raw response
       if (returnRawResponse) {
@@ -58,12 +98,19 @@ export const useAuthenticatedFetch = () => {
         const errorData = await response.json().catch(() => ({ 
           detail: `Request failed with status ${response.status}` 
         }));
+        console.error('❌ Request failed:', errorData);
         throw new Error(errorData.detail || errorData.message || 'Request failed');
       }
       
-      return await response.json();
+      const data = await response.json();
+      console.log('✅ Data received successfully');
+      return data;
     } catch (error) {
       console.error('💥 API request failed:', error);
+      if (error instanceof Error) {
+        console.error('💥 Error message:', error.message);
+        console.error('💥 Error stack:', error.stack);
+      }
       throw error;
     }
   }
