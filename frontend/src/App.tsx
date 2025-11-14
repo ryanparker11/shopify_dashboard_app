@@ -13,13 +13,15 @@ import {
 import enTranslations from '@shopify/polaris/locales/en.json';
 import '@shopify/polaris/build/esm/styles.css';
 
+import './lib/api';
+
 import ShopifyEmbedGate from './components/ShopifyEmbedGate';
 import { AppBridgeProvider } from './components/AppBridgeProvider';
 import { COGSManagement } from './components/COGSManagement';
 import { useEffect, useRef, useState } from 'react';
 import Plot from 'react-plotly.js';
 import { useAuthenticatedFetch } from './lib/api';
-import './lib/api';
+
 
 interface SyncStatus {
   status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'not_found';
