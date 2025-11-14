@@ -20,7 +20,7 @@ import { AppBridgeProvider } from './components/AppBridgeProvider';
 import { COGSManagement } from './components/COGSManagement';
 import { useEffect, useRef, useState } from 'react';
 import Plot from 'react-plotly.js';
-import { useAuthenticatedFetch } from './lib/api';
+import { useAuthenticatedFetch, testGetToken } from './lib/api';
 
 
 interface SyncStatus {
@@ -60,6 +60,21 @@ function AppContent() {
 
   const API_URL =
     import.meta.env.VITE_API_URL || 'https://api.lodestaranalytics.io';
+
+  // --------------------------------------------------------------------
+  // Debug function
+  // --------------------------------------------------------------------
+  const handleTestToken = async () => {
+    try {
+      console.log('🧪 Testing token from UI button...');
+      const token = await testGetToken();
+      console.log('✅ Token from UI:', token.substring(0, 50) + '...');
+      alert('✅ Token retrieved successfully! Check console for full details.');
+    } catch (error) {
+      console.error('❌ Token test failed:', error);
+      alert('❌ Token test failed: ' + (error instanceof Error ? error.message : 'Unknown error'));
+    }
+  };
 
   // --------------------------------------------------------------------
   // Helpers
@@ -471,9 +486,16 @@ function AppContent() {
         <div style={{ marginTop: '30px' }}>
           <Card>
             <BlockStack gap="400">
-              <Text as="h1" variant="headingLg">
-                Welcome to Lodestar
-              </Text>
+              <InlineStack align="space-between" blockAlign="center">
+                <Text as="h1" variant="headingLg">
+                  Welcome to Lodestar
+                </Text>
+                
+                {/* Debug button - remove this before production */}
+                <Button onClick={handleTestToken} tone="critical" size="slim">
+                  🧪 Test Token
+                </Button>
+              </InlineStack>
 
               {totalOrders !== null && (
                 <Text as="p" tone="subdued">
