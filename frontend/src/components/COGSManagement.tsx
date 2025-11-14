@@ -10,7 +10,7 @@ import {
     List,
     Divider
 } from '@shopify/polaris';
-import { useAuthenticatedFetch } from '../lib/api';
+import { authenticatedFetch } from '../lib/api';
 
 interface UploadResult {
     success: boolean;
@@ -34,7 +34,6 @@ interface ProfitMetrics {
 
 interface COGSManagementProps {
     shopDomain: string;
-    apiUrl?: string; // Keep for backwards compatibility but won't be used
 }
 
 export function COGSManagement({ shopDomain }: COGSManagementProps) {
@@ -44,9 +43,6 @@ export function COGSManagement({ shopDomain }: COGSManagementProps) {
     const [uploadError, setUploadError] = useState<string | null>(null);
     const [profitMetrics, setProfitMetrics] = useState<ProfitMetrics | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
-
-    // ✅ Use authenticated fetch hook
-    const authenticatedFetch = useAuthenticatedFetch();
 
     // Load profit metrics on component mount and after successful upload
     const fetchProfitMetrics = useCallback(async () => {
@@ -58,7 +54,7 @@ export function COGSManagement({ shopDomain }: COGSManagementProps) {
         } catch (err) {
             console.error('Error fetching profit metrics:', err);
         }
-    }, [shopDomain, authenticatedFetch]);
+    }, [shopDomain]);
 
     useEffect(() => {
         fetchProfitMetrics();
@@ -67,11 +63,21 @@ export function COGSManagement({ shopDomain }: COGSManagementProps) {
     const downloadTemplate = async () => {
         setDownloadingTemplate(true);
         try {
-            // Get raw response for blob download (third parameter = true)
-            const response = await authenticatedFetch(
-                `/api/cogs/download-template?shop_domain=${encodeURIComponent(shopDomain)}`,
-                {},
-                true
+            // For blob downloads, we need to make a raw fetch request
+            const params = new URLSearchParams(window.location.search);
+            const urlToken = params.get('id_token');
+            
+            if (!urlToken) {
+                throw new Error('No session token available');
+            }
+
+            const response = await fetch(
+                `${import.meta.env.VITE_API_BASE}/api/cogs/download-template?shop_domain=${encodeURIComponent(shopDomain)}`,
+                {
+                    headers: {
+                        'Authorization': `Bearer ${urlToken}`,
+                    },
+                }
             );
 
             if (!response.ok) {
@@ -110,17 +116,25 @@ export function COGSManagement({ shopDomain }: COGSManagementProps) {
         setUploadingFile(true);
 
         try {
+            const params = new URLSearchParams(window.location.search);
+            const urlToken = params.get('id_token');
+            
+            if (!urlToken) {
+                throw new Error('No session token available');
+            }
+
             const formData = new FormData();
             formData.append('file', file);
 
-            // For FormData uploads, we need to get the raw response
-            const response = await authenticatedFetch(
-                `/api/cogs/upload-template?shop_domain=${encodeURIComponent(shopDomain)}`,
+            const response = await fetch(
+                `${import.meta.env.VITE_API_BASE}/api/cogs/upload-template?shop_domain=${encodeURIComponent(shopDomain)}`,
                 {
                     method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${urlToken}`,
+                    },
                     body: formData,
-                },
-                true // Get raw response
+                }
             );
 
             const data = await response.json();
