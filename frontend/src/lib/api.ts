@@ -49,6 +49,8 @@ function getTokenFromUrl(): string | null {
  * Get a fresh session token from App Bridge with request queuing
  * Ensures only ONE token fetch happens at a time
  */
+// frontend/src/lib/api.ts
+
 async function getValidToken(app: ReturnType<typeof useAppBridge>): Promise<string> {
   // If a token fetch is already in progress, wait for it
   if (tokenFetchPromise) {
@@ -56,12 +58,11 @@ async function getValidToken(app: ReturnType<typeof useAppBridge>): Promise<stri
     try {
       return await tokenFetchPromise;
     } catch {
-      // If the in-progress fetch failed, we'll try again below
       console.log('⚠️ Previous token fetch failed, retrying...');
     }
   }
 
-  // Try URL token first (fastest, no iframe communication needed)
+  // Try URL token first
   const urlToken = getTokenFromUrl();
   if (urlToken) {
     console.log('✅ Using valid URL token');
@@ -73,19 +74,33 @@ async function getValidToken(app: ReturnType<typeof useAppBridge>): Promise<stri
   
   tokenFetchPromise = (async () => {
     try {
+      console.log('🔐 Starting getSessionToken call...');
+      
+      const tokenPromise = getSessionToken(app);
+      console.log('🔐 getSessionToken promise created:', tokenPromise);
+      
       const token = await Promise.race([
-        getSessionToken(app),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Token fetch timeout after 8s')), 8000)
-        )
+        tokenPromise.then(t => {
+          console.log('✅ getSessionToken resolved with token:', t.substring(0, 50) + '...');
+          return t;
+        }),
+        new Promise<never>((_, reject) => {
+          const timeoutId = setTimeout(() => {
+            console.log('❌ Timeout fired after 8s');
+            reject(new Error('Token fetch timeout after 8s'));
+          }, 8000);
+          console.log('⏰ Timeout scheduled, ID:', timeoutId);
+        })
       ]);
 
       console.log('✅ Fresh token received from App Bridge');
       return token;
+    } catch (error) {
+      console.error('💥 Token fetch error:', error);
+      throw error;
     } finally {
-      // Clear the promise after completion (success or failure)
-      // Use setTimeout to avoid clearing before other callers get the result
       setTimeout(() => {
+        console.log('🧹 Clearing tokenFetchPromise');
         tokenFetchPromise = null;
       }, 100);
     }
@@ -93,6 +108,7 @@ async function getValidToken(app: ReturnType<typeof useAppBridge>): Promise<stri
 
   return tokenFetchPromise;
 }
+
 
 // Test function
 export const testGetToken = async () => {
