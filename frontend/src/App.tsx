@@ -184,14 +184,14 @@ function AppContent() {
     const waitForAppBridge = () => {
       return new Promise<void>((resolve) => {
         // If already initialized, resolve immediately
-        if (typeof window.AppBridge?.createApp !== 'undefined') {
+        if (window.shopify) {
           console.log('✅ App Bridge already ready');
           resolve();
           return;
         }
 
         checkInterval = setInterval(() => {
-          if (typeof window.AppBridge?.createApp !== 'undefined') {
+          if (window.shopify) {
             if (checkInterval) clearInterval(checkInterval);
             if (timeoutId) clearTimeout(timeoutId);
             console.log('✅ App Bridge confirmed ready');
