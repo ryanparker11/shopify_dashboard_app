@@ -17,9 +17,9 @@ export function AppBridgeProvider({ children }: AppBridgeProviderProps) {
 
   useEffect(() => {
     try {
-      const params = new URLSearchParams(window.location.search);
-      const host = params.get('host');
-      const apiKey = import.meta.env.VITE_SHOPIFY_API_KEY;
+      //const params = new URLSearchParams(window.location.search);
+      const host = new URLSearchParams(location.search).get('host');
+      const apiKey = "68c92aac9cf4890ec0cdc0ce87014cf1";
 
       console.log('🔧 Initializing App Bridge...');
       console.log('🔧 API Key:', apiKey ? 'Present' : 'Missing');
