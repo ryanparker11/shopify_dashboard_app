@@ -13,8 +13,8 @@
       window.addEventListener('DOMContentLoaded', () => {
         console.log('🔍 Checking what CDN loaded...');
         console.log('window.shopify:', window.shopify);
-        console.log('window.AppBridge:', window.AppBridge);
-        console.log('window.createApp:', window.createApp);
+        console.log('window.shopify.app:', window.shopify?.app);
+        console.log('window.shopify.app keys:', window.shopify?.app ? Object.keys(window.shopify.app) : 'undefined');
         console.log('All window properties:', Object.keys(window).filter(k => k.includes('shopify') || k.includes('app') || k.includes('App')));
       });
     </script>
