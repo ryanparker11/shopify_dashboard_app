@@ -37,7 +37,6 @@ export const useAuthenticatedFetch = () => {
       // 1. Try URL token (works immediately on page load)
       // 2. If not available, try getState() for cached token
       // 3. If still not available, fail gracefully
-
       const token = getTokenFromUrl();
       
       if (token) {
