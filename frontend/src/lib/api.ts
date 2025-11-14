@@ -2,23 +2,48 @@
 
 const API_BASE = import.meta.env.VITE_API_BASE;
 
-// Access App Bridge from window (loaded by CDN script)
+// The CDN exposes createApp differently
+const params = new URLSearchParams(window.location.search);
+const host = params.get('host');
+const apiKey = import.meta.env.VITE_SHOPIFY_API_KEY;
+
+if (!host || !apiKey) {
+  throw new Error('Missing Shopify parameters');
+}
+
+// CDN script exposes it as window.AppBridge
+interface AppBridgeInstance {
+  subscribe: (action: string, callback: (payload: AppBridgeAction) => void) => () => void;
+  dispatch: (action: AppBridgeAction) => void;
+}
+
 declare global {
   interface Window {
-    shopify: {
-      environment: {
-        embedded: boolean;
-      };
-    };
-    createApp: (config: {
-      apiKey: string;
-      host: string;
-      forceRedirect?: boolean;
-    }) => {
-      subscribe: (action: string, callback: (payload: AppBridgeAction) => void) => () => void;
-      dispatch: (action: AppBridgeAction) => void;
+    AppBridge?: {
+      createApp: (config: {
+        apiKey: string;
+        host: string;
+        forceRedirect?: boolean;
+      }) => AppBridgeInstance;
     };
   }
+}
+
+// Wait for CDN to load
+const getAppBridge = (): AppBridgeInstance => {
+  if (window.AppBridge?.createApp) {
+    return window.AppBridge.createApp({ apiKey, host, forceRedirect: true });
+  }
+  throw new Error('App Bridge CDN not loaded');
+};
+
+let app: AppBridgeInstance;
+try {
+  app = getAppBridge();
+  console.log('✅ App Bridge from CDN:', app);
+} catch (error) {
+  console.error('❌ Failed to initialize App Bridge:', error);
+  throw error;
 }
 
 interface AppBridgeAction {
@@ -29,24 +54,10 @@ interface AppBridgeAction {
   };
 }
 
-const params = new URLSearchParams(window.location.search);
-const host = params.get('host');
-const apiKey = import.meta.env.VITE_SHOPIFY_API_KEY;
-
-if (!host || !apiKey) {
-  throw new Error('Missing Shopify parameters');
-}
-
-// Use CDN App Bridge (from window.createApp)
-const app = window.createApp({ apiKey, host, forceRedirect: true });
-
-console.log('✅ App Bridge from CDN:', app);
-
 async function getToken(): Promise<string> {
   console.log('🔐 Requesting session token from CDN App Bridge...');
   
   return new Promise((resolve, reject) => {
-    // CDN App Bridge uses different API
     const unsubscribe = app.subscribe('APP::SESSION_TOKEN::RESPOND', (action: AppBridgeAction) => {
       console.log('✅ Got token response');
       unsubscribe();
