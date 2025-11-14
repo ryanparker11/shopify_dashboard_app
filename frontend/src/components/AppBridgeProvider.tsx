@@ -21,18 +21,28 @@ export function AppBridgeProvider({ children }: AppBridgeProviderProps) {
       const host = params.get('host');
       const apiKey = import.meta.env.VITE_SHOPIFY_API_KEY;
 
+      console.log('🔧 Initializing App Bridge...');
+      console.log('🔧 API Key:', apiKey ? 'Present' : 'Missing');
+      console.log('🔧 Host:', host || 'Missing');
+      console.log('🔧 Is in iframe:', window.self !== window.top);
+      console.log('🔧 Current URL:', window.location.href);
+
       // Validate required configuration
       if (!apiKey) {
+        console.error('❌ Missing API key');
         setError('Missing Shopify API key configuration. Please check your environment variables.');
         setLoading(false);
         return;
       }
 
       if (!host) {
+        console.error('❌ Missing host parameter');
         setError('Missing required configuration. Please access this app through your Shopify admin.');
         setLoading(false);
         return;
       }
+
+      console.log('🔧 Creating App Bridge instance...');
 
       // Create App Bridge instance
       const appInstance = createApp({
@@ -41,11 +51,24 @@ export function AppBridgeProvider({ children }: AppBridgeProviderProps) {
         forceRedirect: true,
       });
 
+      console.log('✅ App Bridge created:', appInstance);
+      console.log('✅ App Bridge host origin:', appInstance.hostOrigin);
+      console.log('✅ App Bridge local origin:', appInstance.localOrigin);
+      
+      // Check available features
+      try {
+        const features = appInstance.featuresAvailable();
+        console.log('✅ App Bridge features available:', features);
+      } catch (featureError) {
+        console.warn('⚠️ Could not check features:', featureError);
+      }
+
       console.log('✅ App Bridge initialized successfully');
       setApp(appInstance);
       setError(null);
     } catch (err) {
       console.error('❌ Failed to initialize App Bridge:', err);
+      console.error('❌ Error details:', err instanceof Error ? err.message : err);
       setError('Failed to initialize App Bridge. Please try refreshing the page.');
     } finally {
       setLoading(false);
