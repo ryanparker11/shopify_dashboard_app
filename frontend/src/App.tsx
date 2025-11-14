@@ -15,7 +15,7 @@ import '@shopify/polaris/build/esm/styles.css';
 
 import './lib/api';
 
-import ShopifyEmbedGate from './components/ShopifyEmbedGate';
+//import ShopifyEmbedGate from './components/ShopifyEmbedGate';
 import { AppBridgeProvider } from './components/AppBridgeProvider';
 import { COGSManagement } from './components/COGSManagement';
 import { useEffect, useRef, useState } from 'react';
@@ -522,10 +522,8 @@ function AppContent() {
 
 export default function App() {
   return (
-    <ShopifyEmbedGate>
-      <AppBridgeProvider>
-        <AppContent />
-      </AppBridgeProvider>
-    </ShopifyEmbedGate>
+    <AppBridgeProvider>
+      <AppContent />
+    </AppBridgeProvider>
   );
 }
