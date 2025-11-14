@@ -14,6 +14,68 @@ declare global {
 // Store app instance globally for testing
 let globalAppInstance: ReturnType<typeof useAppBridge> | null = null;
 
+// Cache for session token
+let cachedToken: string | null = null;
+
+
+/**
+ * Get session token from URL params (Shopify sends this on initial load)
+ */
+function getTokenFromUrl(): string | null {
+  const params = new URLSearchParams(window.location.search);
+  return params.get('id_token');
+}
+
+/**
+ * Check if a JWT token is expired
+ */
+function isTokenExpired(token: string): boolean {
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]));
+    const exp = payload.exp * 1000; // Convert to milliseconds
+    return Date.now() >= exp - 10000; // 10 second buffer
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Get a valid session token (from cache, URL, or App Bridge)
+ */
+async function getValidToken(app: ReturnType<typeof useAppBridge>): Promise<string> {
+  // Check if we have a valid cached token
+  if (cachedToken && !isTokenExpired(cachedToken)) {
+    console.log('✅ Using cached token');
+    return cachedToken;
+  }
+  
+  // Try to get token from URL first (Shopify sends this on initial load)
+  const urlToken = getTokenFromUrl();
+  if (urlToken && !isTokenExpired(urlToken)) {
+    console.log('✅ Using token from URL');
+    cachedToken = urlToken;
+    return urlToken;
+  }
+  
+  // Try to get from App Bridge with timeout
+  console.log('🔐 Fetching new token from App Bridge...');
+  try {
+    const token = await Promise.race([
+      getSessionToken(app),
+      new Promise<never>((_, reject) => 
+        setTimeout(() => reject(new Error('Token fetch timeout after 5s')), 5000)
+      )
+    ]);
+    
+    console.log('✅ Token received from App Bridge');
+    cachedToken = token;
+    return token;
+  } catch (error) {
+    console.error('❌ Failed to get token from App Bridge:', error);
+    throw new Error('Unable to authenticate: Session token unavailable');
+  }
+}
+
 // Standalone test function - available immediately
 export const testGetToken = async () => {
   if (!globalAppInstance) {
@@ -25,13 +87,22 @@ export const testGetToken = async () => {
   const start = performance.now();
   
   try {
-    const token = await getSessionToken(globalAppInstance);
+    const token = await getValidToken(globalAppInstance);
     const elapsed = performance.now() - start;
     
     console.log('✅ TEST: Token received successfully!');
     console.log(`⏱️  TEST: Time taken: ${elapsed.toFixed(0)}ms`);
     console.log(`📏 TEST: Token length: ${token.length} characters`);
     console.log(`🎫 TEST: Token preview: ${token.substring(0, 50)}...`);
+    
+    // Decode and show expiry
+    try {
+      const payload = JSON.parse(atob(token.split('.')[1]));
+      const exp = new Date(payload.exp * 1000);
+      console.log(`⏰ TEST: Token expires at: ${exp.toLocaleString()}`);
+    } catch {
+      console.log('⚠️  Could not decode token expiry');
+    }
     
     return token;
   } catch (error) {
@@ -90,19 +161,14 @@ export const useAuthenticatedFetch = () => {
       console.log('🚀 Making authenticated request to:', endpoint);
       console.log('📍 Full URL:', url);
       
-      // Get session token with timeout
+      // Get session token with fallback strategies
       console.log('🔐 Getting session token...');
       const tokenStart = performance.now();
       
-      const token = await Promise.race([
-        getSessionToken(app),
-        new Promise<never>((_, reject) => 
-          setTimeout(() => reject(new Error('Token fetch timeout after 5s')), 5000)
-        )
-      ]);
+      const token = await getValidToken(app);
       
       const tokenElapsed = performance.now() - tokenStart;
-      console.log(`✅ Token retrieved in ${tokenElapsed.toFixed(0)}ms:`, token.substring(0, 50) + '...');
+      console.log(`✅ Token retrieved in ${tokenElapsed.toFixed(0)}ms`);
       
       // Make request with manual Authorization header
       const requestStart = performance.now();
