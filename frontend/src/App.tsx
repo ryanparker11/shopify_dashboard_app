@@ -20,7 +20,7 @@ import { AppBridgeProvider } from './components/AppBridgeProvider';
 import { COGSManagement } from './components/COGSManagement';
 import { useEffect, useRef, useState } from 'react';
 import Plot from 'react-plotly.js';
-import { useAuthenticatedFetch, testGetToken } from './lib/api';
+import { useAuthenticatedFetch, testAuthenticatedFetch } from './lib/api';
 
 
 interface SyncStatus {
@@ -66,13 +66,14 @@ function AppContent() {
   // --------------------------------------------------------------------
   const handleTestToken = async () => {
     try {
-      console.log('🧪 Testing token from UI button...');
-      const token = await testGetToken();
-      console.log('✅ Token from UI:', token.substring(0, 50) + '...');
-      alert('✅ Token retrieved successfully! Check console for full details.');
+      console.log('🧪 Testing authenticated fetch from UI button...');
+      const response = await testAuthenticatedFetch();
+      const data = await response.json();
+      console.log('✅ Response from UI:', response.status, data);
+      alert(`✅ Authenticated fetch successful! Status: ${response.status}. Check console for details.`);
     } catch (error) {
-      console.error('❌ Token test failed:', error);
-      alert('❌ Token test failed: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      console.error('❌ Authenticated fetch test failed:', error);
+      alert('❌ Test failed: ' + (error instanceof Error ? error.message : 'Unknown error'));
     }
   };
 
