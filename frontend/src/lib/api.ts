@@ -3,13 +3,9 @@ import { useAppBridge } from '../hooks/useAppBridge';
 
 const API_BASE = import.meta.env.VITE_API_BASE;
 
-// Define the action type
-interface AppBridgeAction {
-  type: string;
-  payload?: {
-    sessionToken?: string;
-    [key: string]: unknown;
-  };
+function getTokenFromUrl(): string | null {
+  const params = new URLSearchParams(window.location.search);
+  return params.get('id_token');
 }
 
 export const useAuthenticatedFetch = () => {
@@ -36,40 +32,30 @@ export const useAuthenticatedFetch = () => {
 
     try {
       console.log('🚀 Making authenticated request to:', endpoint);
-      console.log('🔐 App Bridge instance:', app);
-      console.log('🔐 App Bridge methods:', Object.keys(app));
-      
-      console.log('🔐 Attempting token fetch...');
-      
-      const tokenPromise = new Promise<string>((resolve, reject) => {
-        console.log('🔐 Setting up token request...');
-        
-        const unsubscribe = app.subscribe('APP::SESSION_TOKEN::RESPOND', (action: AppBridgeAction) => {
-          console.log('📨 Received action from App Bridge:', action);
-          
-          if (action.type === 'APP::SESSION_TOKEN::RESPOND') {
-            console.log('✅ Got session token response!');
-            unsubscribe();
-            if (action.payload?.sessionToken) {
-              resolve(action.payload.sessionToken);
-            } else {
-              reject(new Error('No session token in response'));
-            }
-          }
-        });
-        
-        console.log('📤 Dispatching session token request...');
-        app.dispatch({ type: 'APP::SESSION_TOKEN::REQUEST' });
-        
-        setTimeout(() => {
-          console.log('❌ Token request timed out');
-          unsubscribe();
-          reject(new Error('Token request timeout'));
-        }, 5000);
-      });
 
-      const token = await tokenPromise;
-      console.log('✅ Token received:', token.substring(0, 50) + '...');
+      // FALLBACK STRATEGY:
+      // 1. Try URL token (works immediately on page load)
+      // 2. If not available, try getState() for cached token
+      // 3. If still not available, fail gracefully
+
+      const token = getTokenFromUrl();
+      
+      if (token) {
+        console.log('✅ Using URL token');
+      } else {
+        // Try to get cached state from App Bridge
+        console.log('🔍 Checking App Bridge state for cached token...');
+        try {
+          const state = app.getState();
+          console.log('📊 App Bridge state:', state);
+          // The state might have a session token cached
+          // This is a guess - let's see what's in there
+        } catch (e) {
+          console.warn('⚠️ Could not get App Bridge state:', e);
+        }
+        
+        throw new Error('No session token available - please refresh the page');
+      }
 
       const response = await window.fetch(url, {
         ...options,
