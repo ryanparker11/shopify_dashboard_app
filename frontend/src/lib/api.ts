@@ -1,5 +1,4 @@
 // frontend/src/lib/api.ts
-import { authenticatedFetch as appBridgeAuthenticatedFetch } from '@shopify/app-bridge/utilities';
 import { getSessionToken } from '@shopify/app-bridge/utilities';
 import { useAppBridge } from '../hooks/useAppBridge';
 
@@ -49,11 +48,10 @@ console.log('🔧 api.ts module loaded - about to set window.testGetToken');
 window.testGetToken = testGetToken;
 
 console.log('🔧 window.testGetToken set:', typeof window.testGetToken);
-console.log('🔧 window.testGetToken function:', window.testGetToken);
 
 /**
  * Hook to make authenticated API calls to your backend.
- * Automatically includes session token in Authorization header.
+ * Manually adds session token to Authorization header.
  */
 export const useAuthenticatedFetch = () => {
   console.log('🎣 useAuthenticatedFetch hook called');
@@ -66,9 +64,6 @@ export const useAuthenticatedFetch = () => {
   globalAppInstance = app;
   
   console.log('🎣 globalAppInstance set, can now use window.testGetToken()');
-  
-  // Create the authenticated fetch function using App Bridge
-  const authenticatedFetch = appBridgeAuthenticatedFetch(app);
   
   // Overload signatures for better type inference
   async function fetch<T = unknown>(
@@ -94,25 +89,29 @@ export const useAuthenticatedFetch = () => {
     try {
       console.log('🚀 Making authenticated request to:', endpoint);
       console.log('📍 Full URL:', url);
-      console.log('🔍 Request options:', options);
       
-      // Try to get token manually first to verify it works
-      console.log('🔐 Testing manual token retrieval...');
-      try {
-        const manualToken = await getSessionToken(app);
-        console.log('✅ Manual token retrieved successfully:', manualToken.substring(0, 50) + '...');
-      } catch (tokenError) {
-        console.error('❌ Manual token retrieval failed:', tokenError);
-      }
+      // Get session token with timeout
+      console.log('🔐 Getting session token...');
+      const tokenStart = performance.now();
       
-      console.log('🔐 About to call authenticatedFetch...');
+      const token = await Promise.race([
+        getSessionToken(app),
+        new Promise<never>((_, reject) => 
+          setTimeout(() => reject(new Error('Token fetch timeout after 5s')), 5000)
+        )
+      ]);
+      
+      const tokenElapsed = performance.now() - tokenStart;
+      console.log(`✅ Token retrieved in ${tokenElapsed.toFixed(0)}ms:`, token.substring(0, 50) + '...');
+      
+      // Make request with manual Authorization header
       const requestStart = performance.now();
       
-      // Use App Bridge's authenticatedFetch - it handles session tokens automatically
-      const response = await authenticatedFetch(url, {
+      const response = await window.fetch(url, {
         ...options,
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
           ...options.headers,
         },
       });
