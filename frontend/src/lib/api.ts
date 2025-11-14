@@ -16,11 +16,33 @@ let globalAppInstance: ReturnType<typeof useAppBridge> | null = null;
 let tokenFetchPromise: Promise<string> | null = null;
 
 /**
- * Get session token from URL params (fallback only)
+ * Check if a JWT token is expired
+ */
+function isTokenExpired(token: string): boolean {
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]));
+    const exp = payload.exp * 1000; // Convert to milliseconds
+    const now = Date.now();
+    // Add 5 second buffer to avoid edge cases
+    return now >= (exp - 5000);
+  } catch {
+    return true; // If we can't decode it, consider it expired
+  }
+}
+
+/**
+ * Get session token from URL params (only if valid and not expired)
  */
 function getTokenFromUrl(): string | null {
   const params = new URLSearchParams(window.location.search);
-  return params.get('id_token');
+  const token = params.get('id_token');
+  
+  // Validate token exists and isn't expired
+  if (token && !isTokenExpired(token)) {
+    return token;
+  }
+  
+  return null;
 }
 
 /**
@@ -42,11 +64,11 @@ async function getValidToken(app: ReturnType<typeof useAppBridge>): Promise<stri
   // Try URL token first (fastest, no iframe communication needed)
   const urlToken = getTokenFromUrl();
   if (urlToken) {
-    console.log('✅ Using URL token');
+    console.log('✅ Using valid URL token');
     return urlToken;
   }
 
-  // Start a new token fetch
+  // URL token missing or expired - fetch fresh token from App Bridge
   console.log('🔐 Fetching fresh token from App Bridge...');
   
   tokenFetchPromise = (async () => {
