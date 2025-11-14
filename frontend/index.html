@@ -8,8 +8,16 @@
     <!-- Shopify App Bridge - REQUIRED for embedded apps -->
     <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
     
-    <!-- NOTE: frame-ancestors CSP MUST be set as HTTP header, not meta tag -->
-    <!-- This is handled by the backend SecurityHeadersMiddleware -->
+    <!-- Debug: Check what the CDN loaded -->
+    <script>
+      window.addEventListener('DOMContentLoaded', () => {
+        console.log('🔍 Checking what CDN loaded...');
+        console.log('window.shopify:', window.shopify);
+        console.log('window.AppBridge:', window.AppBridge);
+        console.log('window.createApp:', window.createApp);
+        console.log('All window properties:', Object.keys(window).filter(k => k.includes('shopify') || k.includes('app') || k.includes('App')));
+      });
+    </script>
     
     <title>Lodestar Analytics</title>
   </head>
