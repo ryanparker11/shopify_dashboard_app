@@ -1,60 +1,19 @@
 // frontend/src/lib/api.ts
-import { authenticatedFetch } from '@shopify/app-bridge/utilities';
 import { useAppBridge } from '../hooks/useAppBridge';
 
 const API_BASE = import.meta.env.VITE_API_BASE;
 
-declare global {
-  interface Window {
-    testAuthenticatedFetch?: () => Promise<Response>;
-  }
+// Define the action type
+interface AppBridgeAction {
+  type: string;
+  payload?: {
+    sessionToken?: string;
+    [key: string]: unknown;
+  };
 }
-
-let globalAuthenticatedFetch: ReturnType<typeof authenticatedFetch> | null = null;
-
-// Test function for authenticated fetch
-export const testAuthenticatedFetch = async () => {
-  if (!globalAuthenticatedFetch) {
-    console.error('❌ TEST: Authenticated fetch not initialized yet.');
-    throw new Error('Authenticated fetch not initialized');
-  }
-
-  console.log('🧪 TEST: Attempting authenticated fetch...');
-  const start = performance.now();
-
-  try {
-    // Make a test request to your backend
-    const response = await globalAuthenticatedFetch(`${API_BASE}/api/me`, {
-      method: 'GET',
-    });
-    
-    const elapsed = performance.now() - start;
-
-    console.log('✅ TEST: Request completed successfully!');
-    console.log(`⏱️  TEST: Time taken: ${elapsed.toFixed(0)}ms`);
-    console.log(`📊 TEST: Status: ${response.status}`);
-    console.log(`📋 TEST: Headers:`, response.headers);
-
-    return response;
-  } catch (error) {
-    const elapsed = performance.now() - start;
-    console.error(`❌ TEST: Failed after ${elapsed.toFixed(0)}ms`, error);
-    throw error;
-  }
-};
-
-window.testAuthenticatedFetch = testAuthenticatedFetch;
 
 export const useAuthenticatedFetch = () => {
   const app = useAppBridge();
-
-  console.log('🔧 Initializing Shopify authenticatedFetch...');
-  
-  // Create Shopify's authenticated fetch function
-  const shopifyFetch = authenticatedFetch(app);
-  globalAuthenticatedFetch = shopifyFetch;
-  
-  console.log('✅ Shopify authenticatedFetch initialized');
 
   async function fetch<T = unknown>(
     endpoint: string,
@@ -77,22 +36,51 @@ export const useAuthenticatedFetch = () => {
 
     try {
       console.log('🚀 Making authenticated request to:', endpoint);
-      console.log('📍 Full URL:', url);
+      console.log('🔐 App Bridge instance:', app);
+      console.log('🔐 App Bridge methods:', Object.keys(app));
+      
+      console.log('🔐 Attempting token fetch...');
+      
+      const tokenPromise = new Promise<string>((resolve, reject) => {
+        console.log('🔐 Setting up token request...');
+        
+        const unsubscribe = app.subscribe('APP::SESSION_TOKEN::RESPOND', (action: AppBridgeAction) => {
+          console.log('📨 Received action from App Bridge:', action);
+          
+          if (action.type === 'APP::SESSION_TOKEN::RESPOND') {
+            console.log('✅ Got session token response!');
+            unsubscribe();
+            if (action.payload?.sessionToken) {
+              resolve(action.payload.sessionToken);
+            } else {
+              reject(new Error('No session token in response'));
+            }
+          }
+        });
+        
+        console.log('📤 Dispatching session token request...');
+        app.dispatch({ type: 'APP::SESSION_TOKEN::REQUEST' });
+        
+        setTimeout(() => {
+          console.log('❌ Token request timed out');
+          unsubscribe();
+          reject(new Error('Token request timeout'));
+        }, 5000);
+      });
 
-      const requestStart = performance.now();
+      const token = await tokenPromise;
+      console.log('✅ Token received:', token.substring(0, 50) + '...');
 
-      // Use Shopify's authenticatedFetch - it handles tokens internally
-      console.log('🔐 Using Shopify authenticatedFetch (handles tokens automatically)...');
-      const response = await shopifyFetch(url, {
+      const response = await window.fetch(url, {
         ...options,
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
           ...options.headers,
         },
       });
 
-      const requestElapsed = performance.now() - requestStart;
-      console.log(`✅ Response received in ${requestElapsed.toFixed(0)}ms: ${response.status}`);
+      console.log(`✅ Response received: ${response.status}`);
 
       if (returnRawResponse) {
         return response;
@@ -102,7 +90,6 @@ export const useAuthenticatedFetch = () => {
         const errorData = await response.json().catch(() => ({
           detail: `Request failed with status ${response.status}`
         }));
-        console.error('❌ Request failed:', errorData);
         throw new Error(errorData.detail || errorData.message || 'Request failed');
       }
 
@@ -111,10 +98,6 @@ export const useAuthenticatedFetch = () => {
       return data;
     } catch (error) {
       console.error('💥 API request failed:', error);
-      if (error instanceof Error) {
-        console.error('💥 Error message:', error.message);
-        console.error('💥 Error stack:', error.stack);
-      }
       throw error;
     }
   }

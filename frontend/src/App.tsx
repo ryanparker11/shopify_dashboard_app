@@ -20,7 +20,7 @@ import { AppBridgeProvider } from './components/AppBridgeProvider';
 import { COGSManagement } from './components/COGSManagement';
 import { useEffect, useRef, useState } from 'react';
 import Plot from 'react-plotly.js';
-import { useAuthenticatedFetch, testAuthenticatedFetch } from './lib/api';
+import { useAuthenticatedFetch } from './lib/api';
 
 
 interface SyncStatus {
@@ -64,18 +64,18 @@ function AppContent() {
   // --------------------------------------------------------------------
   // Debug function
   // --------------------------------------------------------------------
-  const handleTestToken = async () => {
-    try {
-      console.log('🧪 Testing authenticated fetch from UI button...');
-      const response = await testAuthenticatedFetch();
-      const data = await response.json();
-      console.log('✅ Response from UI:', response.status, data);
-      alert(`✅ Authenticated fetch successful! Status: ${response.status}. Check console for details.`);
-    } catch (error) {
-      console.error('❌ Authenticated fetch test failed:', error);
-      alert('❌ Test failed: ' + (error instanceof Error ? error.message : 'Unknown error'));
-    }
-  };
+//  const handleTestToken = async () => {
+//    try {
+//      console.log('🧪 Testing authenticated fetch from UI button...');
+//      const response = await testAuthenticatedFetch();
+//      const data = await response.json();
+//      console.log('✅ Response from UI:', response.status, data);
+//      alert(`✅ Authenticated fetch successful! Status: ${response.status}. Check console for details.`);
+//    } catch (error) {
+//      console.error('❌ Authenticated fetch test failed:', error);
+//      alert('❌ Test failed: ' + (error instanceof Error ? error.message : 'Unknown error'));
+//    }
+//  };
 
   // --------------------------------------------------------------------
   // Helpers
@@ -492,10 +492,7 @@ function AppContent() {
                   Welcome to Lodestar
                 </Text>
                 
-                {/* Debug button - remove this before production */}
-                <Button onClick={handleTestToken} tone="critical" size="slim">
-                  🧪 Test Token
-                </Button>
+
               </InlineStack>
 
               {totalOrders !== null && (
