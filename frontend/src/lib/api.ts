@@ -2,37 +2,27 @@
 
 const API_BASE = import.meta.env.VITE_API_BASE;
 
-const params = new URLSearchParams(window.location.search);
-const host = params.get('host');
-const apiKey = import.meta.env.VITE_SHOPIFY_API_KEY;
-
-if (!host || !apiKey) {
-  throw new Error('Missing Shopify parameters');
-}
-
-// CDN exposes App Bridge through window.shopify
-interface ShopifyApp {
-  app: {
-    getSessionToken: () => Promise<string>;
-  };
+// CDN exposes idToken through window.shopify
+interface ShopifyGlobal {
+  idToken: () => Promise<string>;
 }
 
 declare global {
   interface Window {
-    shopify?: ShopifyApp;
+    shopify?: ShopifyGlobal;
   }
 }
 
 async function getToken(): Promise<string> {
   console.log('🔐 Requesting session token from Shopify CDN...');
   
-  if (!window.shopify?.app?.getSessionToken) {
+  if (!window.shopify?.idToken) {
     throw new Error('Shopify App Bridge not available');
   }
 
   try {
-    const token = await window.shopify.app.getSessionToken();
-    console.log('✅ Got token from Shopify CDN');
+    const token = await window.shopify.idToken();
+    console.log('✅ Got token from Shopify CDN:', token.substring(0, 50) + '...');
     return token;
   } catch (error) {
     console.error('❌ Failed to get token:', error);
