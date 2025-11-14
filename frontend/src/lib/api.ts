@@ -2,7 +2,6 @@
 
 const API_BASE = import.meta.env.VITE_API_BASE;
 
-// The CDN exposes createApp differently
 const params = new URLSearchParams(window.location.search);
 const host = params.get('host');
 const apiKey = import.meta.env.VITE_SHOPIFY_API_KEY;
@@ -11,70 +10,34 @@ if (!host || !apiKey) {
   throw new Error('Missing Shopify parameters');
 }
 
-// CDN script exposes it as window.AppBridge
-interface AppBridgeInstance {
-  subscribe: (action: string, callback: (payload: AppBridgeAction) => void) => () => void;
-  dispatch: (action: AppBridgeAction) => void;
+// CDN exposes App Bridge through window.shopify
+interface ShopifyApp {
+  app: {
+    getSessionToken: () => Promise<string>;
+  };
 }
 
 declare global {
   interface Window {
-    AppBridge?: {
-      createApp: (config: {
-        apiKey: string;
-        host: string;
-        forceRedirect?: boolean;
-      }) => AppBridgeInstance;
-    };
+    shopify?: ShopifyApp;
   }
-}
-
-// Wait for CDN to load
-const getAppBridge = (): AppBridgeInstance => {
-  if (window.AppBridge?.createApp) {
-    return window.AppBridge.createApp({ apiKey, host, forceRedirect: true });
-  }
-  throw new Error('App Bridge CDN not loaded');
-};
-
-let app: AppBridgeInstance;
-try {
-  app = getAppBridge();
-  console.log('✅ App Bridge from CDN:', app);
-} catch (error) {
-  console.error('❌ Failed to initialize App Bridge:', error);
-  throw error;
-}
-
-interface AppBridgeAction {
-  type: string;
-  payload?: {
-    sessionToken?: string;
-    [key: string]: unknown;
-  };
 }
 
 async function getToken(): Promise<string> {
-  console.log('🔐 Requesting session token from CDN App Bridge...');
+  console.log('🔐 Requesting session token from Shopify CDN...');
   
-  return new Promise((resolve, reject) => {
-    const unsubscribe = app.subscribe('APP::SESSION_TOKEN::RESPOND', (action: AppBridgeAction) => {
-      console.log('✅ Got token response');
-      unsubscribe();
-      if (action.payload?.sessionToken) {
-        resolve(action.payload.sessionToken);
-      } else {
-        reject(new Error('No token in response'));
-      }
-    });
-    
-    app.dispatch({ type: 'APP::SESSION_TOKEN::REQUEST' });
-    
-    setTimeout(() => {
-      unsubscribe();
-      reject(new Error('Token timeout'));
-    }, 5000);
-  });
+  if (!window.shopify?.app?.getSessionToken) {
+    throw new Error('Shopify App Bridge not available');
+  }
+
+  try {
+    const token = await window.shopify.app.getSessionToken();
+    console.log('✅ Got token from Shopify CDN');
+    return token;
+  } catch (error) {
+    console.error('❌ Failed to get token:', error);
+    throw error;
+  }
 }
 
 export async function authenticatedFetch<T = unknown>(
@@ -95,6 +58,8 @@ export async function authenticatedFetch<T = unknown>(
       ...options.headers,
     },
   });
+
+  console.log(`✅ Response: ${response.status}`);
 
   if (!response.ok) {
     throw new Error(`Request failed: ${response.status}`);
