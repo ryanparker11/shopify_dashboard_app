@@ -15,12 +15,10 @@ import '@shopify/polaris/build/esm/styles.css';
 
 import './lib/api';
 
-//import ShopifyEmbedGate from './components/ShopifyEmbedGate';
-import { AppBridgeProvider } from './components/AppBridgeProvider';
 import { COGSManagement } from './components/COGSManagement';
 import { useEffect, useRef, useState } from 'react';
 import Plot from 'react-plotly.js';
-import { useAuthenticatedFetch } from './lib/api';
+import { authenticatedFetch } from './lib/api';
 
 
 interface SyncStatus {
@@ -55,27 +53,8 @@ function AppContent() {
   const [showBanner, setShowBanner] = useState(false);
   const prevStatusRef = useRef<SyncStatus['status'] | null>(null);
 
-  // Use the authenticated fetch hook from api.ts
-  const authenticatedFetch = useAuthenticatedFetch();
-
   const API_URL =
     import.meta.env.VITE_API_URL || 'https://api.lodestaranalytics.io';
-
-  // --------------------------------------------------------------------
-  // Debug function
-  // --------------------------------------------------------------------
-//  const handleTestToken = async () => {
-//    try {
-//      console.log('🧪 Testing authenticated fetch from UI button...');
-//      const response = await testAuthenticatedFetch();
-//      const data = await response.json();
-//      console.log('✅ Response from UI:', response.status, data);
-//      alert(`✅ Authenticated fetch successful! Status: ${response.status}. Check console for details.`);
-//    } catch (error) {
-//      console.error('❌ Authenticated fetch test failed:', error);
-//      alert('❌ Test failed: ' + (error instanceof Error ? error.message : 'Unknown error'));
-//    }
-//  };
 
   // --------------------------------------------------------------------
   // Helpers
@@ -137,8 +116,19 @@ function AppContent() {
 
       console.log('Attempting to download from:', url);
       
-      // Get raw response for blob download (third parameter = true)
-      const response = await authenticatedFetch(url, {}, true);
+      // For blob downloads, manually get token and use raw fetch
+      const params = new URLSearchParams(window.location.search);
+      const urlToken = params.get('id_token');
+      
+      if (!urlToken) {
+        throw new Error('No session token available');
+      }
+
+      const response = await fetch(`${import.meta.env.VITE_API_BASE}${url}`, {
+        headers: {
+          'Authorization': `Bearer ${urlToken}`,
+        },
+      });
       
       if (!response.ok) {
         const errorText = await response.text();
@@ -194,14 +184,14 @@ function AppContent() {
     const waitForAppBridge = () => {
       return new Promise<void>((resolve) => {
         // If already initialized, resolve immediately
-        if (window.__SHOPIFY_APP__) {
+        if (typeof window.createApp !== 'undefined') {
           console.log('✅ App Bridge already ready');
           resolve();
           return;
         }
 
         checkInterval = setInterval(() => {
-          if (window.__SHOPIFY_APP__) {
+          if (typeof window.createApp !== 'undefined') {
             if (checkInterval) clearInterval(checkInterval);
             if (timeoutId) clearTimeout(timeoutId);
             console.log('✅ App Bridge confirmed ready');
@@ -491,8 +481,6 @@ function AppContent() {
                 <Text as="h1" variant="headingLg">
                   Welcome to Lodestar
                 </Text>
-                
-
               </InlineStack>
 
               {totalOrders !== null && (
@@ -519,9 +507,5 @@ function AppContent() {
 }
 
 export default function App() {
-  return (
-    <AppBridgeProvider>
-      <AppContent />
-    </AppBridgeProvider>
-  );
+  return <AppContent />;
 }
