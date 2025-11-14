@@ -12,6 +12,40 @@ declare global {
   }
 }
 
+// Store app instance globally for testing
+let globalAppInstance: ReturnType<typeof useAppBridge> | null = null;
+
+// Standalone test function - available immediately
+export const testGetToken = async () => {
+  if (!globalAppInstance) {
+    console.error('❌ TEST: App Bridge not initialized yet. Navigate to the app first, then try again.');
+    throw new Error('App Bridge not initialized');
+  }
+  
+  console.log('🧪 TEST: Attempting to get session token manually...');
+  const start = performance.now();
+  
+  try {
+    const token = await getSessionToken(globalAppInstance);
+    const elapsed = performance.now() - start;
+    
+    console.log('✅ TEST: Token received successfully!');
+    console.log(`⏱️  TEST: Time taken: ${elapsed.toFixed(0)}ms`);
+    console.log(`📏 TEST: Token length: ${token.length} characters`);
+    console.log(`🎫 TEST: Token preview: ${token.substring(0, 50)}...`);
+    
+    return token;
+  } catch (error) {
+    const elapsed = performance.now() - start;
+    console.error(`❌ TEST: Token fetch failed after ${elapsed.toFixed(0)}ms`);
+    console.error('❌ TEST: Error:', error);
+    throw error;
+  }
+};
+
+// Expose test function globally
+window.testGetToken = testGetToken;
+
 /**
  * Hook to make authenticated API calls to your backend.
  * Automatically includes session token in Authorization header.
@@ -19,34 +53,11 @@ declare global {
 export const useAuthenticatedFetch = () => {
   const app = useAppBridge();
   
+  // Store app instance globally for testing
+  globalAppInstance = app;
+  
   // Create the authenticated fetch function using App Bridge
   const authenticatedFetch = appBridgeAuthenticatedFetch(app);
-  
-  // Test function to manually get token
-  const testGetToken = async () => {
-    console.log('🧪 TEST: Attempting to get session token manually...');
-    const start = performance.now();
-    
-    try {
-      const token = await getSessionToken(app);
-      const elapsed = performance.now() - start;
-      
-      console.log('✅ TEST: Token received successfully!');
-      console.log(`⏱️  TEST: Time taken: ${elapsed.toFixed(0)}ms`);
-      console.log(`📏 TEST: Token length: ${token.length} characters`);
-      console.log(`🎫 TEST: Token preview: ${token.substring(0, 50)}...`);
-      
-      return token;
-    } catch (error) {
-      const elapsed = performance.now() - start;
-      console.error(`❌ TEST: Token fetch failed after ${elapsed.toFixed(0)}ms`);
-      console.error('❌ TEST: Error:', error);
-      throw error;
-    }
-  };
-  
-  // Expose test function globally for debugging
-  window.testGetToken = testGetToken;
   
   // Overload signatures for better type inference
   async function fetch<T = unknown>(
