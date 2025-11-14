@@ -32,6 +32,8 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers["Content-Security-Policy"] = (
             "frame-ancestors https://admin.shopify.com https://*.myshopify.com"
         )
+        if "X-Frame-Options" in response.headers:
+            del response.headers["X-Frame-Options"]
         return response
 
 # Add security headers middleware FIRST
@@ -44,6 +46,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://app.lodestaranalytics.io",
+        "https://admin.shopify.com",
         "http://localhost:5173"  # for local development
     ],
     allow_credentials=True,
