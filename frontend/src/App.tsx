@@ -19,6 +19,7 @@ import { COGSManagement } from './components/COGSManagement';
 import { useEffect, useRef, useState } from 'react';
 import Plot from 'react-plotly.js';
 import { useAuthenticatedFetch } from './lib/api';
+import './lib/api';
 
 interface SyncStatus {
   status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'not_found';
