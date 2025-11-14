@@ -43,18 +43,29 @@ export const testGetToken = async () => {
   }
 };
 
+console.log('🔧 api.ts module loaded - about to set window.testGetToken');
+
 // Expose test function globally
 window.testGetToken = testGetToken;
+
+console.log('🔧 window.testGetToken set:', typeof window.testGetToken);
+console.log('🔧 window.testGetToken function:', window.testGetToken);
 
 /**
  * Hook to make authenticated API calls to your backend.
  * Automatically includes session token in Authorization header.
  */
 export const useAuthenticatedFetch = () => {
+  console.log('🎣 useAuthenticatedFetch hook called');
+  
   const app = useAppBridge();
+  
+  console.log('🎣 App Bridge instance received:', app);
   
   // Store app instance globally for testing
   globalAppInstance = app;
+  
+  console.log('🎣 globalAppInstance set, can now use window.testGetToken()');
   
   // Create the authenticated fetch function using App Bridge
   const authenticatedFetch = appBridgeAuthenticatedFetch(app);
@@ -83,8 +94,17 @@ export const useAuthenticatedFetch = () => {
     try {
       console.log('🚀 Making authenticated request to:', endpoint);
       console.log('📍 Full URL:', url);
+      console.log('🔍 Request options:', options);
       
-      // Test getting token before the request
+      // Try to get token manually first to verify it works
+      console.log('🔐 Testing manual token retrieval...');
+      try {
+        const manualToken = await getSessionToken(app);
+        console.log('✅ Manual token retrieved successfully:', manualToken.substring(0, 50) + '...');
+      } catch (tokenError) {
+        console.error('❌ Manual token retrieval failed:', tokenError);
+      }
+      
       console.log('🔐 About to call authenticatedFetch...');
       const requestStart = performance.now();
       
