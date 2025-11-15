@@ -2,7 +2,8 @@
 
 const API_BASE = import.meta.env.VITE_API_BASE;
 
-// No need to manually get tokens - App Bridge handles it automatically!
+console.log('🔧 App Bridge API Module Loaded');
+console.log('API Base URL:', API_BASE);
 
 export async function authenticatedFetch<T = unknown>(
   endpoint: string,
@@ -11,36 +12,33 @@ export async function authenticatedFetch<T = unknown>(
   const url = `${API_BASE}${endpoint}`;
   
   console.log('🚀 API REQUEST:', endpoint);
-  console.log('📍 Full URL:', url);
   
-  // App Bridge CDN automatically adds Authorization header
+  // App Bridge CDN automatically intercepts fetch() and adds Authorization header
   const response = await fetch(url, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
       ...options.headers,
-      // DO NOT manually add Authorization header
-      // App Bridge adds it automatically
     },
   });
 
-  console.log(`✅ Response: ${response.status}`);
+  console.log(`📥 Response: ${response.status}`);
 
-  // Handle 401 with retry header (as per Shopify docs)
-  if (response.status === 401) {
-    const retryHeader = response.headers.get('X-Shopify-Retry-Invalid-Session-Request');
-    if (retryHeader === '1') {
-      console.log('🔄 Session expired, App Bridge will retry with new token');
-      // App Bridge will automatically retry with fresh token
-      throw new Error('Session expired - retrying');
-    }
-  }
+  // DO NOT handle 401 here - let it bubble up so App Bridge can retry
+  // App Bridge will automatically retry with a fresh token when it sees:
+  // - 401 status
+  // - X-Shopify-Retry-Invalid-Session-Request header
 
   if (!response.ok) {
+    const errorText = await response.text().catch(() => 'Unknown error');
+    console.error('❌ Request failed:', errorText);
     throw new Error(`Request failed: ${response.status}`);
   }
 
-  return response.json();
+  const data = await response.json();
+  console.log('✅ Request successful');
+  
+  return data;
 }
 
 export const api = {
