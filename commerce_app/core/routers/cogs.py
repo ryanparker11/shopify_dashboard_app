@@ -244,7 +244,7 @@ async def profit_analysis(shop_domain: str, days: int = 30):
             JOIN shopify.orders o ON li.order_id = o.order_id
             LEFT JOIN shopify.product_variants pv ON li.variant_id = pv.variant_id
             WHERE o.shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
-
+              AND o.created_at >= NOW() - INTERVAL '1 day' * %s
               AND o.financial_status IN ('paid', 'partially_paid')
               AND li.variant_id IS NOT NULL
         )
@@ -264,7 +264,7 @@ async def profit_analysis(shop_domain: str, days: int = 30):
         
         async with get_conn() as conn:
             async with conn.cursor() as cur:
-                await cur.execute(sql, (shop_domain))
+                await cur.execute(sql, (shop_domain, days))
                 row = await cur.fetchone()
                 
                 if not row:
@@ -273,6 +273,7 @@ async def profit_analysis(shop_domain: str, days: int = 30):
                 total_revenue, total_cogs, gross_profit, profit_margin_pct, order_count, items_without_cogs = row
                 
                 return {
+                    "period_days": days,
                     "total_revenue": float(total_revenue),
                     "total_cogs": float(total_cogs),
                     "gross_profit": float(gross_profit),
