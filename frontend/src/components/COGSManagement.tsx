@@ -10,7 +10,7 @@ import {
     List,
     Divider
 } from '@shopify/polaris';
-import { authenticatedFetch } from '../lib/api';
+import { authenticatedFetch, getSessionTokenForApp } from '../lib/api';
 
 interface UploadResult {
     success: boolean;
@@ -63,9 +63,16 @@ export function COGSManagement({ shopDomain }: COGSManagementProps) {
     const downloadTemplate = async () => {
         setDownloadingTemplate(true);
         try {
-            // App Bridge will automatically add Authorization header
+            // Get session token for blob download
+            const token = await getSessionTokenForApp();
+            
             const response = await fetch(
-                `${import.meta.env.VITE_API_BASE}/api/cogs/download-template?shop_domain=${encodeURIComponent(shopDomain)}`
+                `${import.meta.env.VITE_API_BASE}/api/cogs/download-template?shop_domain=${encodeURIComponent(shopDomain)}`,
+                {
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                    },
+                }
             );
 
             if (!response.ok) {
@@ -104,14 +111,19 @@ export function COGSManagement({ shopDomain }: COGSManagementProps) {
         setUploadingFile(true);
 
         try {
+            // Get session token for file upload
+            const token = await getSessionTokenForApp();
+            
             const formData = new FormData();
             formData.append('file', file);
 
-            // App Bridge will automatically add Authorization header
             const response = await fetch(
                 `${import.meta.env.VITE_API_BASE}/api/cogs/upload-template?shop_domain=${encodeURIComponent(shopDomain)}`,
                 {
                     method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                    },
                     body: formData,
                 }
             );

@@ -34,6 +34,10 @@ async function getToken(): Promise<string> {
   }
 }
 
+export async function getSessionTokenForApp(): Promise<string> {
+  return getToken();
+}
+
 export async function authenticatedFetch<T = unknown>(
   endpoint: string,
   options: RequestInit = {}
