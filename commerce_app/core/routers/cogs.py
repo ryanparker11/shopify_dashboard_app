@@ -264,7 +264,7 @@ async def profit_analysis(shop_domain: str, days: int = 30):
         
         async with get_conn() as conn:
             async with conn.cursor() as cur:
-                await cur.execute(sql, (shop_domain, days))
+                await cur.execute(sql, (shop_domain))
                 row = await cur.fetchone()
                 
                 if not row:
@@ -273,7 +273,6 @@ async def profit_analysis(shop_domain: str, days: int = 30):
                 total_revenue, total_cogs, gross_profit, profit_margin_pct, order_count, items_without_cogs = row
                 
                 return {
-                    "period_days": days,
                     "total_revenue": float(total_revenue),
                     "total_cogs": float(total_cogs),
                     "gross_profit": float(gross_profit),
