@@ -21,8 +21,9 @@ interface UploadResult {
     message: string;
 }
 
+// NOTE: period_days can be null when backend returns all-time stats
 interface ProfitMetrics {
-    period_days: number;
+    period_days: number | null;
     total_revenue: number;
     total_cogs: number;
     gross_profit: number;
@@ -48,7 +49,7 @@ export function COGSManagement({ shopDomain }: COGSManagementProps) {
     const fetchProfitMetrics = useCallback(async () => {
         try {
             const data = await authenticatedFetch<ProfitMetrics>(
-                `/api/cogs/profit-analysis?shop_domain=${encodeURIComponent(shopDomain)}&days=30`
+                `/api/cogs/profit-analysis?shop_domain=${encodeURIComponent(shopDomain)}`
             );
             setProfitMetrics(data);
         } catch (err) {
@@ -156,6 +157,13 @@ export function COGSManagement({ shopDomain }: COGSManagementProps) {
         }).format(amount);
     };
 
+    const getPeriodLabel = () => {
+        if (!profitMetrics) return '';
+        if (profitMetrics.period_days == null) return 'All time';
+        if (profitMetrics.period_days === 1) return 'Last 1 day';
+        return `Last ${profitMetrics.period_days} days`;
+    };
+
     return (
         <BlockStack gap="400">
             {/* COGS Upload Card */}
@@ -244,7 +252,7 @@ export function COGSManagement({ shopDomain }: COGSManagementProps) {
                 <Card>
                     <BlockStack gap="400">
                         <Text as="h2" variant="headingMd">
-                            Profit Analysis (Last 30 Days)
+                            Profit Analysis ({getPeriodLabel()})
                         </Text>
 
                         {!profitMetrics.has_complete_data && (
@@ -288,7 +296,11 @@ export function COGSManagement({ shopDomain }: COGSManagementProps) {
                                         <Text as="p" tone="subdued" variant="bodySm">
                                             Gross Profit
                                         </Text>
-                                        <Text as="p" variant="headingLg" tone={profitMetrics.gross_profit >= 0 ? 'success' : 'critical'}>
+                                        <Text
+                                            as="p"
+                                            variant="headingLg"
+                                            tone={profitMetrics.gross_profit >= 0 ? 'success' : 'critical'}
+                                        >
                                             {formatCurrency(profitMetrics.gross_profit)}
                                         </Text>
                                     </BlockStack>
@@ -298,7 +310,11 @@ export function COGSManagement({ shopDomain }: COGSManagementProps) {
                                         <Text as="p" tone="subdued" variant="bodySm">
                                             Profit Margin
                                         </Text>
-                                        <Text as="p" variant="headingLg" tone={profitMetrics.profit_margin_percentage >= 0 ? 'success' : 'critical'}>
+                                        <Text
+                                            as="p"
+                                            variant="headingLg"
+                                            tone={profitMetrics.profit_margin_percentage >= 0 ? 'success' : 'critical'}
+                                        >
                                             {profitMetrics.profit_margin_percentage.toFixed(2)}%
                                         </Text>
                                     </BlockStack>
