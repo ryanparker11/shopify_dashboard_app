@@ -5,18 +5,23 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     
-    <!-- Shopify App Bridge - REQUIRED for embedded apps -->
+    <!-- Load Shopify App Bridge CDN -->
     <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
     
-    <!-- Debug: Check what the CDN loaded -->
+    <!-- Configure App Bridge with your API key -->
     <script>
-      window.addEventListener('DOMContentLoaded', () => {
-        console.log('🔍 Checking what CDN loaded...');
-        console.log('window.shopify:', window.shopify);
-        console.log('window.shopify.app:', window.shopify?.app);
-        console.log('window.shopify.app keys:', window.shopify?.app ? Object.keys(window.shopify.app) : 'undefined');
-        console.log('All window properties:', Object.keys(window).filter(k => k.includes('shopify') || k.includes('app') || k.includes('App')));
-      });
+      // Get URL parameters
+      const urlParams = new URLSearchParams(window.location.search);
+      const host = urlParams.get('host');
+      
+      // Configure Shopify App Bridge
+      if (window.shopify && host) {
+        window.shopify.config = {
+          apiKey: '68c92aac9cf4890ec0cdc0ce87014cf1',  // Your Shopify API key
+          host: host
+        };
+        console.log('✅ App Bridge configured with API key');
+      }
     </script>
     
     <title>Lodestar Analytics</title>
