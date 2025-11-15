@@ -20,6 +20,12 @@ import { useEffect, useRef, useState } from 'react';
 import Plot from 'react-plotly.js';
 import { authenticatedFetch } from './lib/api';
 
+// Add type declaration for Shopify CDN
+declare global {
+  interface Window {
+    shopify?: unknown;
+  }
+}
 
 interface SyncStatus {
   status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'not_found';
@@ -116,19 +122,9 @@ function AppContent() {
 
       console.log('Attempting to download from:', url);
       
-      // For blob downloads, manually get token and use raw fetch
-      const params = new URLSearchParams(window.location.search);
-      const urlToken = params.get('id_token');
-      
-      if (!urlToken) {
-        throw new Error('No session token available');
-      }
-
-      const response = await fetch(`${import.meta.env.VITE_API_BASE}${url}`, {
-        headers: {
-          'Authorization': `Bearer ${urlToken}`,
-        },
-      });
+      // Use authenticatedFetch for blob downloads
+      // App Bridge will add the Authorization header automatically
+      const response = await fetch(`${import.meta.env.VITE_API_BASE}${url}`);
       
       if (!response.ok) {
         const errorText = await response.text();

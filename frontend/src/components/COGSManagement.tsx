@@ -63,21 +63,9 @@ export function COGSManagement({ shopDomain }: COGSManagementProps) {
     const downloadTemplate = async () => {
         setDownloadingTemplate(true);
         try {
-            // For blob downloads, we need to make a raw fetch request
-            const params = new URLSearchParams(window.location.search);
-            const urlToken = params.get('id_token');
-            
-            if (!urlToken) {
-                throw new Error('No session token available');
-            }
-
+            // App Bridge will automatically add Authorization header
             const response = await fetch(
-                `${import.meta.env.VITE_API_BASE}/api/cogs/download-template?shop_domain=${encodeURIComponent(shopDomain)}`,
-                {
-                    headers: {
-                        'Authorization': `Bearer ${urlToken}`,
-                    },
-                }
+                `${import.meta.env.VITE_API_BASE}/api/cogs/download-template?shop_domain=${encodeURIComponent(shopDomain)}`
             );
 
             if (!response.ok) {
@@ -116,23 +104,14 @@ export function COGSManagement({ shopDomain }: COGSManagementProps) {
         setUploadingFile(true);
 
         try {
-            const params = new URLSearchParams(window.location.search);
-            const urlToken = params.get('id_token');
-            
-            if (!urlToken) {
-                throw new Error('No session token available');
-            }
-
             const formData = new FormData();
             formData.append('file', file);
 
+            // App Bridge will automatically add Authorization header
             const response = await fetch(
                 `${import.meta.env.VITE_API_BASE}/api/cogs/upload-template?shop_domain=${encodeURIComponent(shopDomain)}`,
                 {
                     method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${urlToken}`,
-                    },
                     body: formData,
                 }
             );
