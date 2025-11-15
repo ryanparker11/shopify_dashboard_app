@@ -5,24 +5,8 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     
-    <!-- Load Shopify App Bridge CDN -->
-    <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
-    
-    <!-- Configure App Bridge with your API key -->
-    <script>
-      // Get URL parameters
-      const urlParams = new URLSearchParams(window.location.search);
-      const host = urlParams.get('host');
-      
-      // Configure Shopify App Bridge
-      if (window.shopify && host) {
-        window.shopify.config = {
-          apiKey: '68c92aac9cf4890ec0cdc0ce87014cf1',  // Your Shopify API key
-          host: host
-        };
-        console.log('✅ App Bridge configured with API key');
-      }
-    </script>
+    <!-- Load Shopify App Bridge CDN with API key -->
+    <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js" data-api-key="68c92aac9cf4890ec0cdc0ce87014cf1"></script>
     
     <title>Lodestar Analytics</title>
   </head>
