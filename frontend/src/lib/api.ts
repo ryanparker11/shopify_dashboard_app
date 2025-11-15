@@ -1,9 +1,38 @@
 // frontend/src/lib/api.ts
+import { createApp } from '@shopify/app-bridge';
+import { getSessionToken } from '@shopify/app-bridge/utilities';
 
 const API_BASE = import.meta.env.VITE_API_BASE;
 
-console.log('🔧 App Bridge API Module Loaded');
-console.log('API Base URL:', API_BASE);
+// Initialize App Bridge with npm package
+const params = new URLSearchParams(window.location.search);
+const host = params.get('host');
+const apiKey = import.meta.env.VITE_SHOPIFY_API_KEY;
+
+let app: ReturnType<typeof createApp> | null = null;
+
+if (host && apiKey) {
+  app = createApp({
+    apiKey,
+    host,
+    forceRedirect: true,
+  });
+  console.log('✅ App Bridge initialized via npm');
+}
+
+async function getToken(): Promise<string> {
+  if (!app) {
+    throw new Error('App Bridge not initialized');
+  }
+  
+  try {
+    const token = await getSessionToken(app);
+    return token;
+  } catch (error) {
+    console.error('Failed to get session token:', error);
+    throw error;
+  }
+}
 
 export async function authenticatedFetch<T = unknown>(
   endpoint: string,
@@ -11,34 +40,22 @@ export async function authenticatedFetch<T = unknown>(
 ): Promise<T> {
   const url = `${API_BASE}${endpoint}`;
   
-  console.log('🚀 API REQUEST:', endpoint);
+  const token = await getToken();
   
-  // App Bridge CDN automatically intercepts fetch() and adds Authorization header
   const response = await fetch(url, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
       ...options.headers,
     },
   });
 
-  console.log(`📥 Response: ${response.status}`);
-
-  // DO NOT handle 401 here - let it bubble up so App Bridge can retry
-  // App Bridge will automatically retry with a fresh token when it sees:
-  // - 401 status
-  // - X-Shopify-Retry-Invalid-Session-Request header
-
   if (!response.ok) {
-    const errorText = await response.text().catch(() => 'Unknown error');
-    console.error('❌ Request failed:', errorText);
     throw new Error(`Request failed: ${response.status}`);
   }
 
-  const data = await response.json();
-  console.log('✅ Request successful');
-  
-  return data;
+  return response.json();
 }
 
 export const api = {
