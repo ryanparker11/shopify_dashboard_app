@@ -4,8 +4,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import os, uvicorn, math, logging
-from fastapi import FastAPI, Request, Depends
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Request, Depends, HTTPException, Header
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
 from commerce_app.integrations.shopify.shopify_client import get_orders, get_customers
@@ -52,6 +52,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],   # includes Authorization
+    expose_headers=["X-Shopify-Retry-Invalid-Session-Request"],  # Allow frontend to see retry header
 )
 
 # -------------------------------
