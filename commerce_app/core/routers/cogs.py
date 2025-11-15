@@ -245,7 +245,7 @@ async def profit_analysis(shop_domain: str):
             JOIN shopify.orders o ON li.order_id = o.order_id
             LEFT JOIN shopify.product_variants pv ON li.variant_id = pv.variant_id
             WHERE o.shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
-              AND o.financial_status IN ('paid', 'partially_paid')
+              AND LOWER(COALESCE(o.financial_status,'')) IN ('paid', 'partially_paid')
               AND li.variant_id IS NOT NULL
         )
         SELECT 
@@ -315,7 +315,7 @@ async def profit_by_product(shop_domain: str, limit: int = 10):
         JOIN shopify.products p ON li.product_id = p.product_id
         LEFT JOIN shopify.product_variants pv ON li.variant_id = pv.variant_id
         WHERE o.shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
-          AND o.financial_status IN ('paid', 'partially_paid')
+          AND LOWER(COALESCE(o.financial_status,'')) IN ('paid', 'partially_paid')
           AND li.variant_id IS NOT NULL
         GROUP BY p.product_id, p.title
         ORDER BY profit DESC
