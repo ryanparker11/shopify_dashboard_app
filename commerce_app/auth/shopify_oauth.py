@@ -19,8 +19,12 @@ SHOPIFY_API_KEY = os.environ["SHOPIFY_API_KEY"]
 SHOPIFY_API_SECRET = os.environ["SHOPIFY_API_SECRET"]
 APP_URL = os.environ["APP_URL"].rstrip("/")
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://app.lodestaranalytics.io")
-SCOPES = ("read_customers,write_customers,read_fulfillments,write_fulfillments,write_inventory,read_inventory,read_orders,write_orders,read_products,write_products")
+SCOPES = (
+    "read_customers,write_customers,read_fulfillments,write_fulfillments,"
+    "write_inventory,read_inventory,read_orders,write_orders,read_products,write_products"
+)
 GRANT_PER_USER = os.environ.get("GRANT_OPTIONS_PER_USER", "false").lower() == "true"
+
 
 def db():
     # Build from components instead of DATABASE_URL
@@ -30,14 +34,18 @@ def db():
     DB_PASSWORD = os.getenv("DB_PASSWORD")
     DB_PORT = os.getenv("DB_PORT", "5432")
     return psycopg2.connect(
-        f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}?sslmode=require", cursor_factory=RealDictCursor
+        f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}?sslmode=require",
+        cursor_factory=RealDictCursor,
     )
+
 
 def is_valid_shop(shop: str) -> bool:
     return shop.endswith(".myshopify.com") and shop.count(".") >= 2 and "/" not in shop
 
+
 def sign_hmac(secret: str, message: str) -> str:
     return hmac.new(secret.encode(), message.encode(), hashlib.sha256).hexdigest()
+
 
 def verify_hmac(secret: str, query: Dict[str, str]) -> bool:
     q = {k: v for k, v in query.items() if k not in ("hmac", "signature")}
@@ -47,10 +55,12 @@ def verify_hmac(secret: str, query: Dict[str, str]) -> bool:
     provided = query.get("hmac", "")
     return hmac.compare_digest(computed, provided)
 
+
 def set_cookie(response: Response, name: str, value: str, max_age: int = 300):
     response.set_cookie(
         name, value, max_age=max_age, httponly=True, secure=True, samesite="none"
     )
+
 
 def get_cookie(request: Request, name: str) -> Optional[str]:
     return request.cookies.get(name)
@@ -67,13 +77,18 @@ async def register_webhooks(shop: str, access_token: str):
         {"topic": "products/update", "address": f"{APP_URL}/webhooks/ingest"},
         {"topic": "customers/create", "address": f"{APP_URL}/webhooks/ingest"},
         {"topic": "customers/update", "address": f"{APP_URL}/webhooks/ingest"},
-
-         # GDPR webhooks (MANDATORY)
-        {"topic": "customers/data_request", "address": f"{APP_URL}/webhooks/customers/data_request"},
-        {"topic": "customers/redact", "address": f"{APP_URL}/webhooks/customers/redact"},
+        # GDPR webhooks (MANDATORY)
+        {
+            "topic": "customers/data_request",
+            "address": f"{APP_URL}/webhooks/customers/data_request",
+        },
+        {
+            "topic": "customers/redact",
+            "address": f"{APP_URL}/webhooks/customers/redact",
+        },
         {"topic": "shop/redact", "address": f"{APP_URL}/webhooks/shop/redact"},
     ]
-    
+
     async with httpx.AsyncClient(timeout=20.0) as client:
         for webhook_config in webhooks_to_create:
             try:
@@ -81,18 +96,22 @@ async def register_webhooks(shop: str, access_token: str):
                     f"https://{shop}/admin/api/2025-10/webhooks.json",
                     headers={
                         "X-Shopify-Access-Token": access_token,
-                        "Content-Type": "application/json"
+                        "Content-Type": "application/json",
                     },
-                    json={"webhook": webhook_config}
+                    json={"webhook": webhook_config},
                 )
-                
+
                 if response.status_code == 201:
                     print(f"✅ Registered webhook: {webhook_config['topic']} for {shop}")
                 elif response.status_code == 422:
-                    print(f"⚠️  Webhook already exists: {webhook_config['topic']} for {shop}")
+                    print(
+                        f"⚠️  Webhook already exists: {webhook_config['topic']} for {shop}"
+                    )
                 else:
-                    print(f"❌ Failed to register webhook {webhook_config['topic']}: {response.text}")
-                    
+                    print(
+                        f"❌ Failed to register webhook {webhook_config['topic']}: {response.text}"
+                    )
+
             except Exception as e:
                 print(f"❌ Error registering webhook {webhook_config['topic']}: {e}")
 
@@ -104,23 +123,23 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
     Runs in background, updates progress in database.
     """
     print(f"🔄 Starting bulk initial sync for {shop}")
-    
+
     # Import here to avoid circular imports
     from commerce_app.core.db import get_conn
     from commerce_app.core.routers.webhooks import process_order_webhook
-    
+
     # Mark sync as in progress
     try:
         async with get_conn() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
                     "UPDATE shopify.shops SET initial_sync_status = 'in_progress' WHERE shop_id = %s",
-                    (shop_id,)
+                    (shop_id,),
                 )
                 await conn.commit()
     except Exception as e:
         print(f"Failed to update sync status: {e}")
-    
+
     # Step 1: Start bulk operation
     # FIXED: Updated to use displayFinancialStatus and displayFulfillmentStatus
     bulk_query = """
@@ -157,10 +176,12 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
       }
     }
     """
-    
+
     # Escape the query for GraphQL mutation
-    escaped_query = bulk_query.replace('\\', '\\\\').replace('"', '\\"').replace('\n', ' ')
-    
+    escaped_query = (
+        bulk_query.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
+    )
+
     mutation = f'''
     mutation {{
       bulkOperationRunQuery(
@@ -177,7 +198,7 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
       }}
     }}
     '''
-    
+
     async with httpx.AsyncClient(timeout=30.0) as client:
         # Start bulk operation
         try:
@@ -185,31 +206,36 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
                 f"https://{shop}/admin/api/2025-10/graphql.json",
                 headers={
                     "X-Shopify-Access-Token": access_token,
-                    "Content-Type": "application/json"
+                    "Content-Type": "application/json",
                 },
-                json={"query": mutation}
+                json={"query": mutation},
             )
-            
+
             if response.status_code != 200:
                 print(f"Failed to start bulk operation: {response.text}")
                 await mark_sync_failed(shop_id, "Failed to start bulk operation")
                 return
-            
+
             data = response.json()
-            
-            if "errors" in data or data.get("data", {}).get("bulkOperationRunQuery", {}).get("userErrors"):
+
+            if (
+                "errors" in data
+                or data.get("data", {})
+                .get("bulkOperationRunQuery", {})
+                .get("userErrors")
+            ):
                 print(f"GraphQL errors: {data}")
                 await mark_sync_failed(shop_id, "GraphQL errors")
                 return
-            
+
             operation_id = data["data"]["bulkOperationRunQuery"]["bulkOperation"]["id"]
             print(f"✅ Started bulk operation: {operation_id}")
-            
+
         except Exception as e:
             print(f"Error starting bulk operation: {e}")
             await mark_sync_failed(shop_id, str(e))
             return
-        
+
         # Step 2: Poll until complete
         status_query = """
         query {
@@ -226,130 +252,152 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
           }
         }
         """ % operation_id
-        
+
         jsonl_url = None
         max_wait = 600  # 10 minutes max
         start_time = asyncio.get_event_loop().time()
-        
+
         while True:
             if asyncio.get_event_loop().time() - start_time > max_wait:
                 print(f"Bulk operation timed out after {max_wait}s")
                 await mark_sync_failed(shop_id, "Timeout")
                 return
-            
+
             try:
                 response = await client.post(
                     f"https://{shop}/admin/api/2025-10/graphql.json",
                     headers={
                         "X-Shopify-Access-Token": access_token,
-                        "Content-Type": "application/json"
+                        "Content-Type": "application/json",
                     },
-                    json={"query": status_query}
+                    json={"query": status_query},
                 )
-                
+
                 if response.status_code != 200:
                     await asyncio.sleep(2)
                     continue
-                
+
                 data = response.json()
                 operation = data.get("data", {}).get("node", {})
                 status = operation.get("status")
-                
-                print(f"📊 Bulk operation status: {status} ({operation.get('objectCount', 0)} objects)")
-                
+
+                print(
+                    f"📊 Bulk operation status: {status} ({operation.get('objectCount', 0)} objects)"
+                )
+
                 if status == "COMPLETED":
                     jsonl_url = operation.get("url")
-                    print(f"✅ Bulk operation completed: {operation.get('objectCount')} orders")
+                    print(
+                        f"✅ Bulk operation completed: {operation.get('objectCount')} orders"
+                    )
                     break
                 elif status in ["FAILED", "CANCELED", "EXPIRED"]:
-                    print(f"Bulk operation failed: {status} - {operation.get('errorCode')}")
+                    print(
+                        f"Bulk operation failed: {status} - {operation.get('errorCode')}"
+                    )
                     jsonl_url = operation.get("partialDataUrl")  # Try partial data
                     break
-                
+
                 await asyncio.sleep(2)  # Check every 2 seconds
-                
+
             except Exception as e:
                 print(f"Error polling bulk operation: {e}")
                 await asyncio.sleep(2)
                 continue
-        
+
         if not jsonl_url:
             print("No data URL returned from bulk operation")
             await mark_sync_failed(shop_id, "No data URL")
             return
-        
+
         # Step 3: Download and process JSONL file
         print(f"📥 Downloading bulk data from {jsonl_url}")
         try:
             response = await client.get(jsonl_url, timeout=120.0)
-            
+
             if response.status_code != 200:
                 print(f"Failed to download bulk data: {response.status_code}")
                 await mark_sync_failed(shop_id, "Download failed")
                 return
-            
+
         except Exception as e:
             print(f"Error downloading bulk data: {e}")
             await mark_sync_failed(shop_id, str(e))
             return
-        
+
         # Process JSONL (newline-delimited JSON)
-        lines = response.text.strip().split('\n')
+        lines = response.text.strip().split("\n")
         total_orders = 0
         errors = 0
-        
+
         async with get_conn() as conn:
             async with conn.cursor() as cur:
                 for line in lines:
                     if not line.strip():
                         continue
-                    
+
                     try:
                         order = json.loads(line)
-                        
+
                         # Convert GraphQL format to REST format for process_order_webhook
                         rest_format_order = {
-                            "id": order.get("id", "").split("/")[-1],  # Extract numeric ID from gid://
+                            "id": order.get("id", "").split("/")[
+                                -1
+                            ],  # Extract numeric ID from gid://
                             "name": order.get("name"),
                             "order_number": order.get("name", "").replace("#", ""),
                             "email": order.get("email"),
-                            "total_price": order.get("totalPriceSet", {}).get("shopMoney", {}).get("amount", "0"),
-                            "subtotal_price": order.get("subtotalPriceSet", {}).get("shopMoney", {}).get("amount", "0"),
-                            "total_tax": order.get("totalTaxSet", {}).get("shopMoney", {}).get("amount", "0"),
-                            "currency": order.get("totalPriceSet", {}).get("shopMoney", {}).get("currencyCode", "USD"),
+                            "total_price": order.get("totalPriceSet", {})
+                            .get("shopMoney", {})
+                            .get("amount", "0"),
+                            "subtotal_price": order.get("subtotalPriceSet", {})
+                            .get("shopMoney", {})
+                            .get("amount", "0"),
+                            "total_tax": order.get("totalTaxSet", {})
+                            .get("shopMoney", {})
+                            .get("amount", "0"),
+                            "currency": order.get("totalPriceSet", {})
+                            .get("shopMoney", {})
+                            .get("currencyCode", "USD"),
                             "financial_status": order.get("displayFinancialStatus"),
-                            "fulfillment_status": order.get("displayFulfillmentStatus"),
+                            "fulfillment_status": order.get(
+                                "displayFulfillmentStatus"
+                            ),
                             "created_at": order.get("createdAt"),
                             "updated_at": order.get("updatedAt"),
                             "customer": {
-                                "id": order.get("customer", {}).get("id", "").split("/")[-1] if order.get("customer") else None
+                                "id": order.get("customer", {})
+                                .get("id", "")
+                                .split("/")[-1]
+                                if order.get("customer")
+                                else None
                             },
-                            "line_items": order.get("lineItems", {}).get("edges", [])
+                            "line_items": order.get("lineItems", {}).get("edges", []),
                         }
-                        
+
                         await process_order_webhook(cur, shop_id, rest_format_order)
                         total_orders += 1
-                        
+
                         # Commit in batches of 100 for performance and update progress
                         if total_orders % 100 == 0:
                             await conn.commit()
                             print(f"📦 Processed {total_orders} orders...")
-                            
+
                             # Update progress in database
                             await cur.execute(
                                 "UPDATE shopify.shops SET initial_sync_order_count = %s WHERE shop_id = %s",
-                                (total_orders, shop_id)
+                                (total_orders, shop_id),
                             )
                             await conn.commit()
-                        
+
                     except Exception as e:
                         print(f"Error processing order line: {e}")
                         errors += 1
                         continue
-                
+
                 # Final commit
                 await conn.commit()
-                
+
                 # Mark sync as complete
                 await cur.execute(
                     """UPDATE shopify.shops 
@@ -357,11 +405,13 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
                            initial_sync_completed_at = NOW(),
                            initial_sync_order_count = %s
                        WHERE shop_id = %s""",
-                    (total_orders, shop_id)
+                    (total_orders, shop_id),
                 )
                 await conn.commit()
-        
-        print(f"✅ Bulk sync complete for {shop}: {total_orders} orders imported ({errors} errors)")
+
+        print(
+            f"✅ Bulk sync complete for {shop}: {total_orders} orders imported ({errors} errors)"
+        )
 
 
 # ============================================================================
@@ -373,10 +423,10 @@ async def sync_products(shop: str, shop_id: int, access_token: str):
     Much faster than REST pagination - no rate limits!
     """
     print(f"🔄 Starting bulk product sync for {shop}")
-    
+
     from commerce_app.core.db import get_conn
     from commerce_app.core.routers.webhooks import process_product_webhook
-    
+
     # FIXED: Removed weight/weightUnit from variant, added to inventoryItem
     bulk_query = """
     {
@@ -430,10 +480,12 @@ async def sync_products(shop: str, shop_id: int, access_token: str):
       }
     }
     """
-    
+
     # Escape for GraphQL mutation
-    escaped_query = bulk_query.replace('\\', '\\\\').replace('"', '\\"').replace('\n', ' ')
-    
+    escaped_query = (
+        bulk_query.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
+    )
+
     mutation = f'''
     mutation {{
       bulkOperationRunQuery(query: "{escaped_query}") {{
@@ -442,7 +494,7 @@ async def sync_products(shop: str, shop_id: int, access_token: str):
       }}
     }}
     '''
-    
+
     async with httpx.AsyncClient(timeout=30.0) as client:
         # Start bulk operation
         try:
@@ -450,28 +502,33 @@ async def sync_products(shop: str, shop_id: int, access_token: str):
                 f"https://{shop}/admin/api/2025-10/graphql.json",
                 headers={
                     "X-Shopify-Access-Token": access_token,
-                    "Content-Type": "application/json"
+                    "Content-Type": "application/json",
                 },
-                json={"query": mutation}
+                json={"query": mutation},
             )
-            
+
             if response.status_code != 200:
                 print(f"Failed to start product bulk operation: {response.text}")
                 return
-            
+
             data = response.json()
-            
-            if "errors" in data or data.get("data", {}).get("bulkOperationRunQuery", {}).get("userErrors"):
+
+            if (
+                "errors" in data
+                or data.get("data", {})
+                .get("bulkOperationRunQuery", {})
+                .get("userErrors")
+            ):
                 print(f"GraphQL errors: {data}")
                 return
-            
+
             operation_id = data["data"]["bulkOperationRunQuery"]["bulkOperation"]["id"]
             print(f"✅ Started product bulk operation: {operation_id}")
-            
+
         except Exception as e:
             print(f"Error starting product bulk operation: {e}")
             return
-        
+
         # Poll for completion
         status_query = """
         query {
@@ -487,79 +544,81 @@ async def sync_products(shop: str, shop_id: int, access_token: str):
           }
         }
         """ % operation_id
-        
+
         jsonl_url = None
         max_wait = 600  # 10 minutes
         start_time = asyncio.get_event_loop().time()
-        
+
         while True:
             if asyncio.get_event_loop().time() - start_time > max_wait:
-                print(f"Product bulk operation timed out")
+                print("Product bulk operation timed out")
                 return
-            
+
             await asyncio.sleep(2)
-            
+
             try:
                 response = await client.post(
                     f"https://{shop}/admin/api/2025-10/graphql.json",
                     headers={
                         "X-Shopify-Access-Token": access_token,
-                        "Content-Type": "application/json"
+                        "Content-Type": "application/json",
                     },
-                    json={"query": status_query}
+                    json={"query": status_query},
                 )
-                
+
                 if response.status_code != 200:
                     continue
-                
+
                 data = response.json()
                 operation = data.get("data", {}).get("node", {})
                 status = operation.get("status")
-                
-                print(f"📊 Product sync status: {status} ({operation.get('objectCount', 0)} objects)")
-                
+
+                print(
+                    f"📊 Product sync status: {status} ({operation.get('objectCount', 0)} objects)"
+                )
+
                 if status == "COMPLETED":
                     jsonl_url = operation.get("url")
-                    print(f"✅ Product bulk operation completed")
+                    print("✅ Product bulk operation completed")
                     break
                 elif status in ["FAILED", "CANCELED", "EXPIRED"]:
                     print(f"Product sync failed: {status}")
                     jsonl_url = operation.get("partialDataUrl")
                     break
-                    
+
             except Exception as e:
                 print(f"Error polling product bulk operation: {e}")
                 continue
-        
+
         if not jsonl_url:
             print("No product data URL")
             return
-        
+
         # Download and process
-        print(f"📥 Downloading product data...")
+        print("📥 Downloading product data...")
         try:
             response = await client.get(jsonl_url, timeout=120.0)
-            
+
             if response.status_code != 200:
                 print(f"Failed to download product data: {response.status_code}")
                 return
-                
+
         except Exception as e:
             print(f"Error downloading product data: {e}")
             return
-        
-        lines = response.text.strip().split('\n')
+
+        lines = response.text.strip().split("\n")
         products_map = {}
-        
+
         # Parse JSONL - group products with their variants
         for line in lines:
             if not line.strip():
                 continue
-            
+
             try:
                 item = json.loads(line)
                 item_id = item.get("id", "")
-                
+
                 if "/Product/" in item_id:
                     product_id = item_id.split("/")[-1]
                     products_map[product_id] = {
@@ -572,7 +631,7 @@ async def sync_products(shop: str, shop_id: int, access_token: str):
                         "status": item.get("status"),
                         "createdAt": item.get("createdAt"),
                         "updatedAt": item.get("updatedAt"),
-                        "variants": []
+                        "variants": [],
                     }
                 elif "/ProductVariant/" in item_id:
                     parent_id = item.get("__parentId", "").split("/")[-1]
@@ -581,7 +640,7 @@ async def sync_products(shop: str, shop_id: int, access_token: str):
                         inventory_item = item.get("inventoryItem", {})
                         measurement = inventory_item.get("measurement", {})
                         weight_data = measurement.get("weight", {})
-                        
+
                         variant_data = {
                             "id": item_id.split("/")[-1],
                             "title": item.get("title"),
@@ -596,30 +655,36 @@ async def sync_products(shop: str, shop_id: int, access_token: str):
                             "barcode": item.get("barcode"),
                             "weight": weight_data.get("value"),
                             "weightUnit": weight_data.get("unit"),
-                            "inventoryQuantity": item.get("inventoryQuantity")
+                            "inventoryQuantity": item.get("inventoryQuantity"),
                         }
-                        
+
                         # Parse selectedOptions into option1, option2, option3
                         selected_options = item.get("selectedOptions", [])
                         for i, opt in enumerate(selected_options[:3], 1):
                             variant_data[f"option{i}"] = opt.get("value")
-                        
+
                         # Parse inventoryItem data
                         if inventory_item:
-                            variant_data["inventoryItemId"] = inventory_item.get("id", "").split("/")[-1]
-                            variant_data["inventoryManagement"] = "shopify" if inventory_item.get("tracked") else None
-                            variant_data["requiresShipping"] = inventory_item.get("requiresShipping")
-                        
+                            variant_data["inventoryItemId"] = (
+                                inventory_item.get("id", "").split("/")[-1]
+                            )
+                            variant_data["inventoryManagement"] = (
+                                "shopify" if inventory_item.get("tracked") else None
+                            )
+                            variant_data["requiresShipping"] = inventory_item.get(
+                                "requiresShipping"
+                            )
+
                         products_map[parent_id]["variants"].append(variant_data)
             except Exception as e:
                 print(f"Error parsing product line: {e}")
                 continue
-        
+
         # Save to database
         total_products = 0
         total_variants = 0
         errors = 0
-        
+
         async with get_conn() as conn:
             async with conn.cursor() as cur:
                 for product_data in products_map.values():
@@ -627,18 +692,24 @@ async def sync_products(shop: str, shop_id: int, access_token: str):
                         await process_product_webhook(cur, shop_id, product_data)
                         total_products += 1
                         total_variants += len(product_data["variants"])
-                        
+
                         if total_products % 50 == 0:
                             await conn.commit()
-                            print(f"📦 Processed {total_products} products, {total_variants} variants...")
+                            print(
+                                f"📦 Processed {total_products} products, {total_variants} variants..."
+                            )
                     except Exception as e:
-                        print(f"Error processing product {product_data.get('id')}: {e}")
+                        print(
+                            f"Error processing product {product_data.get('id')}: {e}"
+                        )
                         errors += 1
                         continue
-                
+
                 await conn.commit()
-        
-        print(f"✅ Product sync complete: {total_products} products, {total_variants} variants ({errors} errors)")
+
+        print(
+            f"✅ Product sync complete: {total_products} products, {total_variants} variants ({errors} errors)"
+        )
 
 
 # ============================================================================
@@ -650,9 +721,9 @@ async def sync_product_variants(shop: str, shop_id: int, access_token: str):
     Useful for updating variant-specific data like inventory and pricing.
     """
     print(f"🔄 Starting bulk product variants sync for {shop}")
-    
+
     from commerce_app.core.db import get_conn
-    
+
     # FIXED: Removed weight/weightUnit from variant, added to inventoryItem
     bulk_query = """
     {
@@ -694,9 +765,11 @@ async def sync_product_variants(shop: str, shop_id: int, access_token: str):
       }
     }
     """
-    
-    escaped_query = bulk_query.replace('\\', '\\\\').replace('"', '\\"').replace('\n', ' ')
-    
+
+    escaped_query = (
+        bulk_query.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
+    )
+
     mutation = f'''
     mutation {{
       bulkOperationRunQuery(query: "{escaped_query}") {{
@@ -705,7 +778,7 @@ async def sync_product_variants(shop: str, shop_id: int, access_token: str):
       }}
     }}
     '''
-    
+
     async with httpx.AsyncClient(timeout=30.0) as client:
         # Start bulk operation
         try:
@@ -713,28 +786,33 @@ async def sync_product_variants(shop: str, shop_id: int, access_token: str):
                 f"https://{shop}/admin/api/2025-10/graphql.json",
                 headers={
                     "X-Shopify-Access-Token": access_token,
-                    "Content-Type": "application/json"
+                    "Content-Type": "application/json",
                 },
-                json={"query": mutation}
+                json={"query": mutation},
             )
-            
+
             if response.status_code != 200:
                 print(f"Failed to start variant bulk operation: {response.text}")
                 return
-            
+
             data = response.json()
-            
-            if "errors" in data or data.get("data", {}).get("bulkOperationRunQuery", {}).get("userErrors"):
+
+            if (
+                "errors" in data
+                or data.get("data", {})
+                .get("bulkOperationRunQuery", {})
+                .get("userErrors")
+            ):
                 print(f"GraphQL errors: {data}")
                 return
-            
+
             operation_id = data["data"]["bulkOperationRunQuery"]["bulkOperation"]["id"]
             print(f"✅ Started variant bulk operation: {operation_id}")
-            
+
         except Exception as e:
             print(f"Error starting variant bulk operation: {e}")
             return
-        
+
         # Poll for completion
         status_query = """
         query {
@@ -750,99 +828,121 @@ async def sync_product_variants(shop: str, shop_id: int, access_token: str):
           }
         }
         """ % operation_id
-        
+
         jsonl_url = None
         max_wait = 600
         start_time = asyncio.get_event_loop().time()
-        
+
         while True:
             if asyncio.get_event_loop().time() - start_time > max_wait:
-                print(f"Variant bulk operation timed out")
+                print("Variant bulk operation timed out")
                 return
-            
+
             await asyncio.sleep(2)
-            
+
             try:
                 response = await client.post(
                     f"https://{shop}/admin/api/2025-10/graphql.json",
                     headers={
                         "X-Shopify-Access-Token": access_token,
-                        "Content-Type": "application/json"
+                        "Content-Type": "application/json",
                     },
-                    json={"query": status_query}
+                    json={"query": status_query},
                 )
-                
+
                 if response.status_code != 200:
                     continue
-                
+
                 data = response.json()
                 operation = data.get("data", {}).get("node", {})
                 status = operation.get("status")
-                
-                print(f"📊 Variant sync status: {status} ({operation.get('objectCount', 0)} objects)")
-                
+
+                print(
+                    f"📊 Variant sync status: {status} ({operation.get('objectCount', 0)} objects)"
+                )
+
                 if status == "COMPLETED":
                     jsonl_url = operation.get("url")
-                    print(f"✅ Variant bulk operation completed")
+                    print("✅ Variant bulk operation completed")
                     break
                 elif status in ["FAILED", "CANCELED", "EXPIRED"]:
                     print(f"Variant sync failed: {status}")
                     jsonl_url = operation.get("partialDataUrl")
                     break
-                    
+
             except Exception as e:
                 print(f"Error polling variant bulk operation: {e}")
                 continue
-        
+
         if not jsonl_url:
             print("No variant data URL")
             return
-        
+
         # Download and process
-        print(f"📥 Downloading variant data...")
+        print("📥 Downloading variant data...")
         try:
             response = await client.get(jsonl_url, timeout=120.0)
-            
+
             if response.status_code != 200:
                 print(f"Failed to download variant data: {response.status_code}")
                 return
-                
+
         except Exception as e:
             print(f"Error downloading variant data: {e}")
             return
-        
-        lines = response.text.strip().split('\n')
+
+        lines = response.text.strip().split("\n")
         total_variants = 0
         errors = 0
-        
+
         async with get_conn() as conn:
             async with conn.cursor() as cur:
                 for line in lines:
                     if not line.strip():
                         continue
-                    
+
                     try:
                         variant = json.loads(line)
                         variant_id = variant.get("id", "").split("/")[-1]
-                        product_id = variant.get("product", {}).get("id", "").split("/")[-1]
-                        
+                        product_id = (
+                            variant.get("product", {}).get("id", "").split("/")[-1]
+                        )
+
                         # Parse selectedOptions
                         selected_options = variant.get("selectedOptions", [])
-                        option1 = selected_options[0].get("value") if len(selected_options) > 0 else None
-                        option2 = selected_options[1].get("value") if len(selected_options) > 1 else None
-                        option3 = selected_options[2].get("value") if len(selected_options) > 2 else None
-                        
+                        option1 = (
+                            selected_options[0].get("value")
+                            if len(selected_options) > 0
+                            else None
+                        )
+                        option2 = (
+                            selected_options[1].get("value")
+                            if len(selected_options) > 1
+                            else None
+                        )
+                        option3 = (
+                            selected_options[2].get("value")
+                            if len(selected_options) > 2
+                            else None
+                        )
+
                         # FIXED: Parse weight from inventoryItem.measurement.weight
                         inventory_item = variant.get("inventoryItem", {})
                         measurement = inventory_item.get("measurement", {})
                         weight_data = measurement.get("weight", {})
                         weight = weight_data.get("value")
                         weight_unit = weight_data.get("unit")
-                        
-                        inventory_item_id = inventory_item.get("id", "").split("/")[-1] if inventory_item else None
-                        inventory_management = "shopify" if inventory_item.get("tracked") else None
+
+                        inventory_item_id = (
+                            inventory_item.get("id", "").split("/")[-1]
+                            if inventory_item
+                            else None
+                        )
+                        inventory_management = (
+                            "shopify" if inventory_item.get("tracked") else None
+                        )
                         requires_shipping = inventory_item.get("requiresShipping")
-                        
+
                         # Update variant in database
                         await cur.execute(
                             """
@@ -879,32 +979,47 @@ async def sync_product_variants(shop: str, shop_id: int, access_token: str):
                                 requires_shipping = EXCLUDED.requires_shipping
                             """,
                             (
-                                shop_id, variant_id, product_id, variant.get("title"),
-                                variant.get("price"), variant.get("sku"),
-                                variant.get("position"), variant.get("inventoryPolicy"),
-                                variant.get("compareAtPrice"), option1, option2, option3,
-                                variant.get("createdAt"), variant.get("updatedAt"),
-                                variant.get("taxable"), variant.get("barcode"),
-                                weight, weight_unit,
-                                inventory_item_id, variant.get("inventoryQuantity"),
-                                inventory_management, requires_shipping
-                            )
+                                shop_id,
+                                variant_id,
+                                product_id,
+                                variant.get("title"),
+                                variant.get("price"),
+                                variant.get("sku"),
+                                variant.get("position"),
+                                variant.get("inventoryPolicy"),
+                                variant.get("compareAtPrice"),
+                                option1,
+                                option2,
+                                option3,
+                                variant.get("createdAt"),
+                                variant.get("updatedAt"),
+                                variant.get("taxable"),
+                                variant.get("barcode"),
+                                weight,
+                                weight_unit,
+                                inventory_item_id,
+                                variant.get("inventoryQuantity"),
+                                inventory_management,
+                                requires_shipping,
+                            ),
                         )
-                        
+
                         total_variants += 1
-                        
+
                         if total_variants % 100 == 0:
                             await conn.commit()
                             print(f"📦 Processed {total_variants} variants...")
-                            
+
                     except Exception as e:
                         print(f"Error processing variant: {e}")
                         errors += 1
                         continue
-                
+
                 await conn.commit()
-        
-        print(f"✅ Variant sync complete: {total_variants} variants ({errors} errors)")
+
+        print(
+            f"✅ Variant sync complete: {total_variants} variants ({errors} errors)"
+        )
 
 
 # ============================================================================
@@ -916,9 +1031,9 @@ async def sync_order_line_items(shop: str, shop_id: int, access_token: str):
     Useful for detailed order analysis and profitability calculations.
     """
     print(f"🔄 Starting bulk order line items sync for {shop}")
-    
+
     from commerce_app.core.db import get_conn
-    
+
     bulk_query = """
     {
       orders {
@@ -975,9 +1090,11 @@ async def sync_order_line_items(shop: str, shop_id: int, access_token: str):
       }
     }
     """
-    
-    escaped_query = bulk_query.replace('\\', '\\\\').replace('"', '\\"').replace('\n', ' ')
-    
+
+    escaped_query = (
+        bulk_query.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
+    )
+
     mutation = f'''
     mutation {{
       bulkOperationRunQuery(query: "{escaped_query}") {{
@@ -986,7 +1103,7 @@ async def sync_order_line_items(shop: str, shop_id: int, access_token: str):
       }}
     }}
     '''
-    
+
     async with httpx.AsyncClient(timeout=30.0) as client:
         # Start bulk operation
         try:
@@ -994,28 +1111,33 @@ async def sync_order_line_items(shop: str, shop_id: int, access_token: str):
                 f"https://{shop}/admin/api/2025-10/graphql.json",
                 headers={
                     "X-Shopify-Access-Token": access_token,
-                    "Content-Type": "application/json"
+                    "Content-Type": "application/json",
                 },
-                json={"query": mutation}
+                json={"query": mutation},
             )
-            
+
             if response.status_code != 200:
                 print(f"Failed to start line items bulk operation: {response.text}")
                 return
-            
+
             data = response.json()
-            
-            if "errors" in data or data.get("data", {}).get("bulkOperationRunQuery", {}).get("userErrors"):
+
+            if (
+                "errors" in data
+                or data.get("data", {})
+                .get("bulkOperationRunQuery", {})
+                .get("userErrors")
+            ):
                 print(f"GraphQL errors: {data}")
                 return
-            
+
             operation_id = data["data"]["bulkOperationRunQuery"]["bulkOperation"]["id"]
             print(f"✅ Started line items bulk operation: {operation_id}")
-            
+
         except Exception as e:
             print(f"Error starting line items bulk operation: {e}")
             return
-        
+
         # Poll for completion
         status_query = """
         query {
@@ -1031,120 +1153,146 @@ async def sync_order_line_items(shop: str, shop_id: int, access_token: str):
           }
         }
         """ % operation_id
-        
+
         jsonl_url = None
         max_wait = 600
         start_time = asyncio.get_event_loop().time()
-        
+
         while True:
             if asyncio.get_event_loop().time() - start_time > max_wait:
-                print(f"Line items bulk operation timed out")
+                print("Line items bulk operation timed out")
                 return
-            
+
             await asyncio.sleep(2)
-            
+
             try:
                 response = await client.post(
                     f"https://{shop}/admin/api/2025-10/graphql.json",
                     headers={
                         "X-Shopify-Access-Token": access_token,
-                        "Content-Type": "application/json"
+                        "Content-Type": "application/json",
                     },
-                    json={"query": status_query}
+                    json={"query": status_query},
                 )
-                
+
                 if response.status_code != 200:
                     continue
-                
+
                 data = response.json()
                 operation = data.get("data", {}).get("node", {})
                 status = operation.get("status")
-                
-                print(f"📊 Line items sync status: {status} ({operation.get('objectCount', 0)} objects)")
-                
+
+                print(
+                    f"📊 Line items sync status: {status} ({operation.get('objectCount', 0)} objects)"
+                )
+
                 if status == "COMPLETED":
                     jsonl_url = operation.get("url")
-                    print(f"✅ Line items bulk operation completed")
+                    print("✅ Line items bulk operation completed")
                     break
                 elif status in ["FAILED", "CANCELED", "EXPIRED"]:
                     print(f"Line items sync failed: {status}")
                     jsonl_url = operation.get("partialDataUrl")
                     break
-                    
+
             except Exception as e:
                 print(f"Error polling line items bulk operation: {e}")
                 continue
-        
+
         if not jsonl_url:
             print("No line items data URL")
             return
-        
+
         # Download and process
-        print(f"📥 Downloading line items data...")
+        print("📥 Downloading line items data...")
         try:
             response = await client.get(jsonl_url, timeout=120.0)
-            
+
             if response.status_code != 200:
-                print(f"Failed to download line items data: {response.status_code}")
+                print(
+                    f"Failed to download line items data: {response.status_code}"
+                )
                 return
-                
+
         except Exception as e:
             print(f"Error downloading line items data: {e}")
             return
-        
-        lines = response.text.strip().split('\n')
+
+        lines = response.text.strip().split("\n")
         orders_map = {}
-        
+
         # Parse JSONL - group line items with their orders
         for line in lines:
             if not line.strip():
                 continue
-            
+
             try:
                 item = json.loads(line)
                 item_id = item.get("id", "")
-                
+
                 if "/Order/" in item_id:
                     order_id = item_id.split("/")[-1]
                     orders_map[order_id] = {
                         "id": order_id,
                         "name": item.get("name"),
-                        "line_items": []
+                        "line_items": [],
                     }
                 elif "/LineItem/" in item_id:
                     parent_id = item.get("__parentId", "").split("/")[-1]
                     if parent_id in orders_map:
                         orders_map[parent_id]["line_items"].append(item)
-                        
+
             except Exception as e:
                 print(f"Error parsing line item: {e}")
                 continue
-        
+
         # Save to database
         total_line_items = 0
         errors = 0
-        
+
         async with get_conn() as conn:
             async with conn.cursor() as cur:
                 for order_data in orders_map.values():
                     order_id = order_data["id"]
                     line_number = 1
-                    
+
                     for line_item in order_data["line_items"]:
                         try:
                             line_item_id = line_item.get("id", "").split("/")[-1]
-                            variant_id = line_item.get("variant", {}).get("id", "").split("/")[-1] if line_item.get("variant") else None
-                            product_id = line_item.get("product", {}).get("id", "").split("/")[-1] if line_item.get("product") else None
-                            
+                            variant_id = (
+                                line_item.get("variant", {})
+                                .get("id", "")
+                                .split("/")[-1]
+                                if line_item.get("variant")
+                                else None
+                            )
+                            product_id = (
+                                line_item.get("product", {})
+                                .get("id", "")
+                                .split("/")[-1]
+                                if line_item.get("product")
+                                else None
+                            )
 
                             # Parse pricing - calculate discount
-                            original_total = float(line_item.get("originalTotalSet", {}).get("shopMoney", {}).get("amount", 0))
-                            discounted_total = float(line_item.get("discountedTotalSet", {}).get("shopMoney", {}).get("amount", 0))
+                            original_total = float(
+                                line_item.get("originalTotalSet", {})
+                                .get("shopMoney", {})
+                                .get("amount", 0)
+                            )
+                            discounted_total = float(
+                                line_item.get("discountedTotalSet", {})
+                                .get("shopMoney", {})
+                                .get("amount", 0)
+                            )
                             total_discount = original_total - discounted_total
 
                             # Use discounted unit price as the "price"
-                            unit_price = line_item.get("discountedUnitPriceSet", {}).get("shopMoney", {}).get("amount")
-
+                            unit_price = (
+                                line_item.get("discountedUnitPriceSet", {})
+                                .get("shopMoney", {})
+                                .get("amount")
+                            )
 
                             await cur.execute(
                                 """
@@ -1173,35 +1321,38 @@ async def sync_order_line_items(shop: str, shop_id: int, access_token: str):
                                     line_item.get("title"),
                                     int(line_item.get("quantity", 0)),
                                     float(unit_price) if unit_price else 0.0,
-                                    float(total_discount)
-                                )
+                                    float(total_discount),
+                                ),
                             )
-                            
+
                             line_number += 1
                             total_line_items += 1
-                            
+
                             if total_line_items % 100 == 0:
                                 await conn.commit()
                                 print(f"📦 Processed {total_line_items} line items...")
-                                
+
                         except Exception as e:
                             print(f"Error processing line item: {e}")
                             errors += 1
-                            await conn.rollback() # Rollback failed transaction
+                            await conn.rollback()  # Rollback failed transaction
                             continue
-                
+
                 await conn.commit()
-        
-        print(f"✅ Line items sync complete: {total_line_items} line items ({errors} errors)")
+
+        print(
+            f"✅ Line items sync complete: {total_line_items} line items ({errors} errors)"
+        )
 
 
 # ============================================================================
-# Helper function (uncommented now)
+# Helper function
 # ============================================================================
 async def mark_sync_failed(shop_id: int, error_message: str):
     """Mark initial sync as failed in database."""
     try:
         from commerce_app.core.db import get_conn
+
         async with get_conn() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(
@@ -1209,11 +1360,44 @@ async def mark_sync_failed(shop_id: int, error_message: str):
                        SET initial_sync_status = 'failed',
                            initial_sync_error = %s
                        WHERE shop_id = %s""",
-                    (error_message, shop_id)
+                    (error_message, shop_id),
                 )
                 await conn.commit()
     except Exception as e:
         print(f"Failed to mark sync as failed: {e}")
+
+
+# ============================================================================
+# NEW: Lightweight /auth/check endpoint for frontend AuthGate
+# ============================================================================
+@router.get("/check")
+async def auth_check(shop: str):
+    """
+    Simple check to see if we have an access token stored for this shop.
+
+    Used by the frontend AuthGate to decide whether to redirect the merchant
+    to /auth/start (OAuth) or go straight into the embedded app.
+
+    Returns:
+      200 + {"ok": True} if the shop exists and has an access token
+      401 if no access token is stored
+    """
+    if not is_valid_shop(shop):
+        raise HTTPException(status_code=400, detail="Invalid shop parameter")
+
+    conn = db()
+    with conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT access_token FROM shopify.shops WHERE shop_domain = %s",
+            (shop,),
+        )
+        row = cur.fetchone()
+
+    if row and row.get("access_token"):
+        return {"ok": True}
+
+    # No token yet → frontend should send merchant through /auth/start
+    raise HTTPException(status_code=401, detail="No access token for shop")
 
 
 @router.get("/start")
@@ -1230,7 +1414,8 @@ async def auth_start(request: Request, shop: str, host: Optional[str] = None):
         </script></head><body></body></html>"""
         resp = HTMLResponse(content=html)
         set_cookie(resp, "oauth_state", state)
-        if host: set_cookie(resp, "shopify_host", host)
+        if host:
+            set_cookie(resp, "shopify_host", host)
         return resp
 
     permission_url = (
@@ -1245,7 +1430,8 @@ async def auth_start(request: Request, shop: str, host: Optional[str] = None):
 
     resp = RedirectResponse(permission_url, status_code=302)
     set_cookie(resp, "oauth_state", state)
-    if host: set_cookie(resp, "shopify_host", host)
+    if host:
+        set_cookie(resp, "shopify_host", host)
     return resp
 
 
@@ -1294,15 +1480,20 @@ async def auth_callback(request: Request, background_tasks: BackgroundTasks):
             FROM shopify.shops 
             WHERE shop_domain = %s
             """,
-            (shop,)
+            (shop,),
         )
         existing_shop = cur.fetchone()
-        
+
         # If shop was updated in last 30 seconds, skip token exchange (already done)
-        if existing_shop and existing_shop['updated_at']:
+        if existing_shop and existing_shop["updated_at"]:
             from datetime import datetime, timezone, timedelta
-            if existing_shop['updated_at'] > datetime.now(timezone.utc) - timedelta(seconds=30):
-                print(f"⚠️  Shop {shop} already installed recently, skipping duplicate callback")
+
+            if existing_shop["updated_at"] > datetime.now(
+                timezone.utc
+            ) - timedelta(seconds=30):
+                print(
+                    f"⚠️  Shop {shop} already installed recently, skipping duplicate callback"
+                )
                 # Skip to redirect
                 redirect_url = f"https://{shop}/admin/apps/{SHOPIFY_API_KEY}"
                 return RedirectResponse(url=redirect_url, status_code=302)
@@ -1314,26 +1505,28 @@ async def auth_callback(request: Request, background_tasks: BackgroundTasks):
         "client_secret": SHOPIFY_API_SECRET,
         "code": code,
     }
-    
+
     async with httpx.AsyncClient(timeout=20.0) as client:
         # Get access token
         r = await client.post(token_url, json=payload)
         if r.status_code != 200:
-            raise HTTPException(status_code=400, detail=f"Token exchange failed: {r.text}")
+            raise HTTPException(
+                status_code=400, detail=f"Token exchange failed: {r.text}"
+            )
         data = r.json()
         access_token = data["access_token"]
         scope = data.get("scope", "")
-        
+
         print(f"🔍 REQUESTED SCOPES: {SCOPES}")
         print(f"🔍 GRANTED SCOPES: {scope}")
         print(f"🔍 TOKEN RESPONSE: {json.dumps(data, indent=2)}")
-        
+
         # Fetch shop details
         shop_info_response = await client.get(
             f"https://{shop}/admin/api/2025-10/shop.json",
-            headers={"X-Shopify-Access-Token": access_token}
+            headers={"X-Shopify-Access-Token": access_token},
         )
-        
+
         if shop_info_response.status_code == 200:
             shop_data = shop_info_response.json()["shop"]
             shop_name = shop_data.get("name", "")
@@ -1374,7 +1567,7 @@ async def auth_callback(request: Request, background_tasks: BackgroundTasks):
             conn.rollback()
             cur.execute(
                 "SELECT shop_id FROM shopify.shops WHERE shop_domain = %s",
-                (shop,)
+                (shop,),
             )
             result = cur.fetchone()
             shop_id = result["shop_id"] if result else None
@@ -1385,13 +1578,15 @@ async def auth_callback(request: Request, background_tasks: BackgroundTasks):
     try:
         await register_webhooks(shop, access_token)
         print(f"✅ Webhooks registered for {shop}")
-        
+
         # Run all sync tasks in background
         background_tasks.add_task(initial_data_sync, shop, shop_id, access_token)
         background_tasks.add_task(sync_products, shop, shop_id, access_token)
-        background_tasks.add_task(sync_order_line_items, shop, shop_id, access_token)
+        background_tasks.add_task(
+            sync_order_line_items, shop, shop_id, access_token
+        )
         print(f"📋 Bulk syncs queued for {shop}")
-        
+
     except Exception as e:
         print(f"❌ Failed setup for {shop}: {e}")
         # Don't fail auth flow - merchant is still installed
@@ -1408,6 +1603,7 @@ async def sync_status(shop_domain: str):
     Useful for displaying sync status in your app UI.
     """
     from commerce_app.core.db import get_conn
+
     async with get_conn() as conn:
         async with conn.cursor() as cur:
             await cur.execute(
@@ -1418,18 +1614,18 @@ async def sync_status(shop_domain: str):
                     initial_sync_error
                    FROM shopify.shops 
                    WHERE shop_domain = %s""",
-                (shop_domain,)
+                (shop_domain,),
             )
             row = await cur.fetchone()
-            
+
             if not row:
                 return {"status": "not_found"}
-            
+
             return {
                 "status": row[0],
                 "orders_synced": row[1] or 0,
                 "completed_at": row[2].isoformat() if row[2] else None,
-                "error": row[3]
+                "error": row[3],
             }
 
 
@@ -1437,7 +1633,9 @@ async def sync_status(shop_domain: str):
 # SYNC ENDPOINTS: Manually trigger syncs
 # ============================================================================
 @router.post("/sync-products/{shop_domain}")
-async def trigger_product_sync(shop_domain: str, background_tasks: BackgroundTasks):
+async def trigger_product_sync(
+    shop_domain: str, background_tasks: BackgroundTasks
+):
     """
     Manually trigger a product sync for a shop.
     Useful for backfilling missing products or re-syncing.
@@ -1446,27 +1644,31 @@ async def trigger_product_sync(shop_domain: str, background_tasks: BackgroundTas
     with conn, conn.cursor() as cur:
         cur.execute(
             "SELECT shop_id, access_token FROM shopify.shops WHERE shop_domain = %s",
-            (shop_domain,)
+            (shop_domain,),
         )
         row = cur.fetchone()
-        
+
         if not row:
             raise HTTPException(404, "Shop not found")
-        
+
         shop_id = row["shop_id"]
         access_token = row["access_token"]
-    
+
     # Run sync in background
-    background_tasks.add_task(sync_products, shop_domain, shop_id, access_token)
-    
+    background_tasks.add_task(
+        sync_products, shop_domain, shop_id, access_token
+    )
+
     return {
         "status": "started",
-        "message": f"Product sync started for {shop_domain}"
+        "message": f"Product sync started for {shop_domain}",
     }
 
 
 @router.post("/sync-variants/{shop_domain}")
-async def trigger_variant_sync(shop_domain: str, background_tasks: BackgroundTasks):
+async def trigger_variant_sync(
+    shop_domain: str, background_tasks: BackgroundTasks
+):
     """
     Manually trigger a product variants sync for a shop.
     Useful for updating variant-specific data like inventory and pricing.
@@ -1475,27 +1677,31 @@ async def trigger_variant_sync(shop_domain: str, background_tasks: BackgroundTas
     with conn, conn.cursor() as cur:
         cur.execute(
             "SELECT shop_id, access_token FROM shopify.shops WHERE shop_domain = %s",
-            (shop_domain,)
+            (shop_domain,),
         )
         row = cur.fetchone()
-        
+
         if not row:
             raise HTTPException(404, "Shop not found")
-        
+
         shop_id = row["shop_id"]
         access_token = row["access_token"]
-    
+
     # Run sync in background
-    background_tasks.add_task(sync_product_variants, shop_domain, shop_id, access_token)
-    
+    background_tasks.add_task(
+        sync_product_variants, shop_domain, shop_id, access_token
+    )
+
     return {
         "status": "started",
-        "message": f"Variant sync started for {shop_domain}"
+        "message": f"Variant sync started for {shop_domain}",
     }
 
 
 @router.post("/sync-line-items/{shop_domain}")
-async def trigger_line_items_sync(shop_domain: str, background_tasks: BackgroundTasks):
+async def trigger_line_items_sync(
+    shop_domain: str, background_tasks: BackgroundTasks
+):
     """
     Manually trigger an order line items sync for a shop.
     Useful for detailed order analysis and profitability calculations.
@@ -1504,20 +1710,22 @@ async def trigger_line_items_sync(shop_domain: str, background_tasks: Background
     with conn, conn.cursor() as cur:
         cur.execute(
             "SELECT shop_id, access_token FROM shopify.shops WHERE shop_domain = %s",
-            (shop_domain,)
+            (shop_domain,),
         )
         row = cur.fetchone()
-        
+
         if not row:
             raise HTTPException(404, "Shop not found")
-        
+
         shop_id = row["shop_id"]
         access_token = row["access_token"]
-    
+
     # Run sync in background
-    background_tasks.add_task(sync_order_line_items, shop_domain, shop_id, access_token)
-    
+    background_tasks.add_task(
+        sync_order_line_items, shop_domain, shop_id, access_token
+    )
+
     return {
         "status": "started",
-        "message": f"Line items sync started for {shop_domain}"
+        "message": f"Line items sync started for {shop_domain}",
     }

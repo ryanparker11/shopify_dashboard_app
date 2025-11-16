@@ -17,6 +17,7 @@ import './lib/api';
 
 import { COGSManagement } from './components/COGSManagement';
 import { useEffect, useRef, useState } from 'react';
+import type { ReactNode} from 'react';
 import Plot from 'react-plotly.js';
 import { authenticatedFetch } from './lib/api';
 
@@ -49,6 +50,96 @@ interface ChartsResponse {
   charts: ChartData[];
 }
 
+// --------------------------------------------------------------------
+// NEW: AuthGate component – checks /auth/check and redirects to /auth/start
+// --------------------------------------------------------------------
+function AuthGate({ children }: { children: ReactNode }) {
+  const [isReady, setIsReady] = useState(false);
+  const [hasToken, setHasToken] = useState(false);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const shop = params.get('shop');
+    const host = params.get('host');
+
+    if (!shop) {
+      console.error('Missing ?shop= in URL – skipping auth check');
+      // Let the app render anyway so you can show an error inside
+      setHasToken(true);
+      setIsReady(true);
+      return;
+    }
+
+    const API_URL =
+      import.meta.env.VITE_API_URL || 'https://api.lodestaranalytics.io';
+
+    (async () => {
+      try {
+        const res = await fetch(
+          `${API_URL}/auth/check?shop=${encodeURIComponent(shop)}`,
+          {
+            method: 'GET',
+            headers: { 'Content-Type': 'application/json' },
+            // credentials can be omitted; /auth/check just uses DB
+          }
+        );
+
+        if (res.ok) {
+          // We already have an access token for this shop
+          setHasToken(true);
+          setIsReady(true);
+          return;
+        }
+
+        if (res.status === 401) {
+          // No token yet → send through OAuth flow
+          const authUrl =
+            `${API_URL}/auth/start?shop=${encodeURIComponent(shop)}` +
+            (host ? `&host=${encodeURIComponent(host)}` : '');
+
+          if (window.top) {
+            window.top.location.href = authUrl;
+          } else {
+            window.location.href = authUrl;
+          }
+          return;
+        }
+
+        console.error('Unexpected /auth/check status:', res.status);
+        // As a fallback, let the app render so you can handle it gracefully
+        setHasToken(true);
+        setIsReady(true);
+      } catch (err) {
+        console.error('Error calling /auth/check:', err);
+        // Fallback: attempt to go through OAuth anyway
+        const authUrl =
+          `${API_URL}/auth/start?shop=${encodeURIComponent(shop)}` +
+          (host ? `&host=${encodeURIComponent(host)}` : '');
+
+        if (window.top) {
+          window.top.location.href = authUrl;
+        } else {
+          window.location.href = authUrl;
+        }
+      }
+    })();
+  }, []);
+
+  if (!isReady) {
+    return <div>Loading Lodestar…</div>;
+  }
+
+  if (!hasToken) {
+    // In practice, we redirect before this ever shows.
+    return null;
+  }
+
+  return <>{children}</>;
+}
+
+// --------------------------------------------------------------------
+// Main AppContent – unchanged logic, just wrapped in AuthGate below
+// --------------------------------------------------------------------
 function AppContent() {
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -80,12 +171,16 @@ function AppContent() {
   const fetchChartData = async (shopName: string) => {
     try {
       console.log('🔍 Fetching charts for shop:', shopName);
-      
+
       const data = await authenticatedFetch<ChartsResponse>(
         `/api/charts/${encodeURIComponent(shopName)}`
       );
 
-      console.log('✅ Charts loaded successfully:', data.charts?.length || 0, 'charts');
+      console.log(
+        '✅ Charts loaded successfully:',
+        data.charts?.length || 0,
+        'charts'
+      );
       setChartData(data.charts || []);
     } catch (error) {
       console.error('💥 Failed to fetch chart data:', error);
@@ -102,8 +197,7 @@ function AppContent() {
   const resolveExportUrl = (exportUrl?: string) => {
     if (!exportUrl) return null;
 
-    if (exportUrl.startsWith('/charts'))
-      return `/api${exportUrl}`;
+    if (exportUrl.startsWith('/charts')) return `/api${exportUrl}`;
 
     if (exportUrl.startsWith('/api/')) return exportUrl;
 
@@ -121,11 +215,9 @@ function AppContent() {
       }
 
       console.log('Attempting to download from:', url);
-      
-      // Use authenticatedFetch for blob downloads
-      // App Bridge will add the Authorization header automatically
+
       const response = await fetch(`${import.meta.env.VITE_API_BASE}${url}`);
-      
+
       if (!response.ok) {
         const errorText = await response.text();
         console.error('Download failed with error:', errorText);
@@ -149,11 +241,15 @@ function AppContent() {
       a.remove();
 
       window.URL.revokeObjectURL(objectUrl);
-      
+
       console.log('Download completed successfully');
     } catch (err) {
       console.error('Download error:', err);
-      alert(`Failed to download chart data: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      alert(
+        `Failed to download chart data: ${
+          err instanceof Error ? err.message : 'Unknown error'
+        }`
+      );
     }
   };
 
@@ -186,7 +282,7 @@ function AppContent() {
           return;
         }
 
-        checkInterval = setInterval(() => {
+        checkInterval = window.setInterval(() => {
           if (window.shopify) {
             if (checkInterval) clearInterval(checkInterval);
             if (timeoutId) clearTimeout(timeoutId);
@@ -196,7 +292,7 @@ function AppContent() {
         }, 100);
 
         // Timeout after 5 seconds
-        timeoutId = setTimeout(() => {
+        timeoutId = window.setTimeout(() => {
           if (checkInterval) clearInterval(checkInterval);
           console.warn('⚠️ App Bridge timeout - proceeding anyway');
           resolve();
@@ -211,7 +307,7 @@ function AppContent() {
         console.log('📡 Calling sync-status endpoint');
         console.log('📡 Shop param:', shopParam);
         console.log('📡 API URL:', API_URL);
-      
+
         const response = await fetch(
           `${API_URL}/auth/sync-status/${encodeURIComponent(shopParam)}`,
           {
@@ -228,9 +324,9 @@ function AppContent() {
 
         const data: SyncStatus = await response.json();
         console.log('✅ Sync-status response:', data);
-      
+
         if (isCancelled) return;
-      
+
         setSyncStatus(data);
         setIsLoading(false);
 
@@ -253,12 +349,12 @@ function AppContent() {
         // Only fetch charts/orders when transitioning to completed
         if (data.status === 'completed' && was !== 'completed') {
           console.log('✅ Sync completed - fetching charts and orders');
-        
+
           if (!isCancelled) {
             try {
               await Promise.all([
                 fetchChartData(shopParam),
-                fetchOrdersSummary(shopParam)
+                fetchOrdersSummary(shopParam),
               ]);
               console.log('✅ All data fetched successfully');
             } catch (error) {
@@ -269,7 +365,7 @@ function AppContent() {
 
         // Continue polling if still in progress
         if (data.status === 'pending' || data.status === 'in_progress') {
-          setTimeout(checkSyncStatus, 3000);
+          window.setTimeout(checkSyncStatus, 3000);
         }
       } catch (error) {
         console.error('💥 Failed to fetch sync status:', error);
@@ -309,7 +405,7 @@ function AppContent() {
     const onFocus = () => refresh();
     window.addEventListener('focus', onFocus);
 
-    const intervalId = setInterval(refresh, 5 * 60 * 1000);
+    const intervalId = window.setInterval(refresh, 5 * 60 * 1000);
 
     return () => {
       window.removeEventListener('focus', onFocus);
@@ -413,17 +509,11 @@ function AppContent() {
                 : chart.layout.title?.text || '';
 
             return (
-              <Layout.Section
-                key={chart.key || index}
-                variant="oneHalf"
-              >
+              <Layout.Section key={chart.key || index} variant="oneHalf">
                 <Card>
                   <BlockStack gap="300">
                     <div style={{ padding: '16px 16px 0 16px' }}>
-                      <InlineStack
-                        align="space-between"
-                        blockAlign="center"
-                      >
+                      <InlineStack align="space-between" blockAlign="center">
                         <Text as="h2" variant="headingMd">
                           {titleText}
                         </Text>
@@ -481,8 +571,8 @@ function AppContent() {
 
               {totalOrders !== null && (
                 <Text as="p" tone="subdued">
-                  Your store has{' '}
-                  {totalOrders.toLocaleString()} orders ready to analyze.
+                  Your store has {totalOrders.toLocaleString()} orders ready to
+                  analyze.
                 </Text>
               )}
             </BlockStack>
@@ -502,6 +592,13 @@ function AppContent() {
   );
 }
 
+// --------------------------------------------------------------------
+// Root App – now wrapped in AuthGate
+// --------------------------------------------------------------------
 export default function App() {
-  return <AppContent />;
+  return (
+    <AuthGate>
+      <AppContent />
+    </AuthGate>
+  );
 }
