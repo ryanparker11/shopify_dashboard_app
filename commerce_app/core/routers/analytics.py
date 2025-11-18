@@ -205,7 +205,7 @@ async def get_charts(shop_domain: str) -> Dict[str, List[Dict[str, Any]]]:
                             "xaxis": {"title": "Month"},
                             "yaxis": {"title": "Revenue ($)"}
                         },
-                        "export_url": f"/analytics/charts/{shop_domain}/export/monthly_revenue"
+                        "export_url": f"/charts/{shop_domain}/export/monthly_revenue"
                     })
 
             # Chart 2: Top 5 Products (% of Total Revenue) with "Other"
@@ -258,7 +258,7 @@ async def get_charts(shop_domain: str) -> Dict[str, List[Dict[str, Any]]]:
                         "layout": {
                             "title": "Top 5 Products (% of Revenue)"
                         },
-                        "export_url": f"/analytics/charts/{shop_domain}/export/top_products_revenue"
+                        "export_url": f"/charts/{shop_domain}/export/top_products_revenue"
                     })
 
             # Chart 3: Daily Orders (Line Chart) - Last 30 days
@@ -293,7 +293,7 @@ async def get_charts(shop_domain: str) -> Dict[str, List[Dict[str, Any]]]:
                             "xaxis": {"title": "Date"},
                             "yaxis": {"title": "Number of Orders"}
                         },
-                        "export_url": f"/analytics/charts/{shop_domain}/export/daily_orders_30d"
+                        "export_url": f"/charts/{shop_domain}/export/daily_orders_30d"
                     })
 
             # Chart 4: Revenue by Day (using your existing view)
@@ -325,7 +325,7 @@ async def get_charts(shop_domain: str) -> Dict[str, List[Dict[str, Any]]]:
                             "xaxis": {"title": "Date"},
                             "yaxis": {"title": "Revenue ($)"}
                         },
-                        "export_url": f"/analytics/charts/{shop_domain}/export/daily_revenue_30d"
+                        "export_url": f"/charts/{shop_domain}/export/daily_revenue_30d"
                     })
 
             # Chart 5: Top Customers by Revenue
@@ -370,7 +370,7 @@ async def get_charts(shop_domain: str) -> Dict[str, List[Dict[str, Any]]]:
                             "xaxis": {"title": "Customer"},
                             "yaxis": {"title": "Total Revenue ($)"}
                         },
-                        "export_url": f"/analytics/charts/{shop_domain}/export/top_customers"
+                        "export_url": f"/charts/{shop_domain}/export/top_customers"
                     })
 
         if not charts:
