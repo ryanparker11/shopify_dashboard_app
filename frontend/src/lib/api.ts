@@ -34,6 +34,31 @@ async function getToken(): Promise<string> {
   }
 }
 
+// Add this new function to lib/api.ts
+export async function authenticatedBlobFetch(
+  endpoint: string,
+  options: RequestInit = {}
+): Promise<Blob> {
+  const url = `${API_BASE}${endpoint}`;
+  
+  const token = await getToken();
+  
+  const response = await fetch(url, {
+    ...options,
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      ...options.headers,
+    },
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Request failed: ${response.status} - ${errorText}`);
+  }
+
+  return response.blob();
+}
+
 export async function getSessionTokenForApp(): Promise<string> {
   return getToken();
 }
