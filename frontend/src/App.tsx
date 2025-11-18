@@ -9,6 +9,8 @@ import {
   Layout,
   Button,
   InlineStack,
+  DataTable,
+  Badge,
 } from '@shopify/polaris';
 import enTranslations from '@shopify/polaris/locales/en.json';
 import '@shopify/polaris/build/esm/styles.css';
@@ -49,6 +51,33 @@ interface OrdersSummary {
 interface ChartsResponse {
   charts: ChartData[];
 }
+
+interface Customer {
+  customer_id: number;
+  customer_name: string;
+  customer_email: string;
+  total_orders: number;
+  total_revenue: number;
+  total_profit: number | null;
+  avg_order_value: number;
+  last_order_date: string | null;
+  profit_data_status: 'unavailable' | 'complete' | 'partial';
+  profit_coverage: string | null;
+}
+
+interface CustomerLeaderboardResponse {
+  customers: Customer[];
+  summary: {
+    total_customers: number;
+    total_revenue: number;
+    total_profit: number | null;
+    profit_data_available: boolean;
+    avg_revenue_per_customer: number;
+    avg_profit_per_customer?: number | null;
+  };
+}
+
+type SortDirection = 'ascending' | 'descending' | 'none';
 
 // --------------------------------------------------------------------
 // NEW: AuthGate component – checks /auth/check and redirects to /auth/start
@@ -150,6 +179,11 @@ function AppContent() {
   const [showBanner, setShowBanner] = useState(false);
   const prevStatusRef = useRef<SyncStatus['status'] | null>(null);
 
+  // Customer leaderboard state
+  const [customerData, setCustomerData] = useState<CustomerLeaderboardResponse | null>(null);
+  const [sortedColumn, setSortedColumn] = useState<number | null>(null);
+  const [sortDirection, setSortDirection] = useState<SortDirection>('descending');
+
   const API_URL =
     import.meta.env.VITE_API_URL || 'https://api.lodestaranalytics.io';
 
@@ -167,6 +201,22 @@ function AppContent() {
       console.error('Failed to fetch orders summary:', e);
     }
   }
+
+  const fetchCustomerLeaderboard = async (shopName: string) => {
+    try {
+      console.log('🔍 Fetching customer leaderboard for shop:', shopName);
+
+      const data = await authenticatedFetch<CustomerLeaderboardResponse>(
+        `/api/customers/leaderboard?shop_domain=${encodeURIComponent(shopName)}&limit=50`
+      );
+
+      console.log('✅ Customer leaderboard loaded successfully:', data.customers?.length || 0, 'customers');
+      setCustomerData(data);
+    } catch (error) {
+      console.error('💥 Failed to fetch customer leaderboard:', error);
+      setCustomerData(null);
+    }
+  };
 
   const fetchChartData = async (shopName: string) => {
     try {
@@ -247,6 +297,44 @@ function AppContent() {
       console.error('Download error:', err);
       alert(
         `Failed to download chart data: ${
+          err instanceof Error ? err.message : 'Unknown error'
+        }`
+      );
+    }
+  };
+
+  const downloadCustomerLeaderboard = async () => {
+    if (!shop) return;
+
+    try {
+      const url = `/api/charts/${encodeURIComponent(shop)}/export/top_customers`;
+      console.log('Attempting to download customer leaderboard from:', url);
+
+      const response = await fetch(`${import.meta.env.VITE_API_BASE}${url}`);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Download failed with error:', errorText);
+        throw new Error(`Export failed: ${response.status} - ${errorText}`);
+      }
+
+      const blob = await response.blob();
+      const filename = `customer_leaderboard_${new Date().toISOString().slice(0, 10)}.xlsx`;
+
+      const objectUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = objectUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(objectUrl);
+
+      console.log('Customer leaderboard download completed successfully');
+    } catch (err) {
+      console.error('Download error:', err);
+      alert(
+        `Failed to download customer leaderboard: ${
           err instanceof Error ? err.message : 'Unknown error'
         }`
       );
@@ -346,15 +434,16 @@ function AppContent() {
 
         prevStatusRef.current = now;
 
-        // Only fetch charts/orders when transitioning to completed
+        // Only fetch charts/orders/customers when transitioning to completed
         if (data.status === 'completed' && was !== 'completed') {
-          console.log('✅ Sync completed - fetching charts and orders');
+          console.log('✅ Sync completed - fetching charts, orders, and customers');
 
           if (!isCancelled) {
             try {
               await Promise.all([
                 fetchChartData(shopParam),
                 fetchOrdersSummary(shopParam),
+                fetchCustomerLeaderboard(shopParam),
               ]);
               console.log('✅ All data fetched successfully');
             } catch (error) {
@@ -397,7 +486,10 @@ function AppContent() {
   useEffect(() => {
     if (!shop) return;
 
-    const refresh = () => fetchOrdersSummary(shop);
+    const refresh = () => {
+      fetchOrdersSummary(shop);
+      fetchCustomerLeaderboard(shop);
+    };
 
     // Initial fetch
     refresh();
@@ -495,6 +587,194 @@ function AppContent() {
     }
   };
 
+  const renderCustomerLeaderboard = () => {
+    if (!customerData || customerData.customers.length === 0) return null;
+
+    const { customers, summary } = customerData;
+
+    // Prepare table data with sorting
+    const getSortedCustomers = () => {
+      if (sortedColumn === null || sortDirection === 'none') {
+        return customers;
+      }
+
+      const sorted = [...customers];
+
+      sorted.sort((a, b) => {
+        let aVal: number | string | null;
+        let bVal: number | string | null;
+
+        switch (sortedColumn) {
+          case 0: // Customer Name
+            aVal = a.customer_name;
+            bVal = b.customer_name;
+            break;
+          case 1: // Orders
+            aVal = a.total_orders;
+            bVal = b.total_orders;
+            break;
+          case 2: // Revenue
+            aVal = a.total_revenue;
+            bVal = b.total_revenue;
+            break;
+          case 3: // Profit
+            aVal = a.total_profit ?? 0;
+            bVal = b.total_profit ?? 0;
+            break;
+          case 4: // AOV
+            aVal = a.avg_order_value;
+            bVal = b.avg_order_value;
+            break;
+          case 5: // Last Order
+            aVal = a.last_order_date || '';
+            bVal = b.last_order_date || '';
+            break;
+          default:
+            return 0;
+        }
+
+        if (aVal === null) aVal = 0;
+        if (bVal === null) bVal = 0;
+
+        if (typeof aVal === 'string' && typeof bVal === 'string') {
+          return sortDirection === 'ascending'
+            ? aVal.localeCompare(bVal)
+            : bVal.localeCompare(aVal);
+        }
+
+        return sortDirection === 'ascending'
+          ? (aVal as number) - (bVal as number)
+          : (bVal as number) - (aVal as number);
+      });
+
+      return sorted;
+    };
+
+    const sortedCustomers = getSortedCustomers();
+
+    const headings = [
+      'Customer',
+      'Orders',
+      'Revenue',
+      'Profit',
+      'Avg Order Value',
+      'Last Order',
+    ];
+
+    const rows = sortedCustomers.map((customer) => [
+      <div key={`name-${customer.customer_id}`}>
+        <Text as="p" variant="bodyMd" fontWeight="semibold">
+          {customer.customer_name}
+        </Text>
+        <Text as="p" variant="bodySm" tone="subdued">
+          {customer.customer_email}
+        </Text>
+      </div>,
+      customer.total_orders.toLocaleString(),
+      `$${customer.total_revenue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+      customer.total_profit !== null ? (
+        <div key={`profit-${customer.customer_id}`}>
+          <Text as="p" variant="bodyMd">
+            ${customer.total_profit.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </Text>
+          {customer.profit_data_status === 'partial' && (
+            <Badge tone="warning" size="small">
+              Partial data
+            </Badge>
+          )}
+        </div>
+      ) : (
+        <Badge tone="info" size="small">
+          No COGS data
+        </Badge>
+      ),
+      `$${customer.avg_order_value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+      customer.last_order_date
+        ? new Date(customer.last_order_date).toLocaleDateString('en-US', {
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric',
+          })
+        : 'Never',
+    ]);
+
+    const handleSort = (index: number, direction: SortDirection) => {
+      setSortedColumn(index);
+      setSortDirection(direction);
+    };
+
+    return (
+      <div style={{ marginTop: '20px' }}>
+        <Card>
+          <BlockStack gap="400">
+            <InlineStack align="space-between" blockAlign="center">
+              <div>
+                <Text as="h2" variant="headingLg">
+                  Customer Leaderboard
+                </Text>
+                <Text as="p" variant="bodySm" tone="subdued">
+                  Top {summary.total_customers} customers by revenue
+                </Text>
+              </div>
+              <Button onClick={downloadCustomerLeaderboard}>
+                Download Excel
+              </Button>
+            </InlineStack>
+
+            {/* Summary Cards */}
+            <InlineStack gap="400" wrap={false}>
+              <Card>
+                <BlockStack gap="200">
+                  <Text as="p" variant="bodySm" tone="subdued">
+                    Total Revenue
+                  </Text>
+                  <Text as="p" variant="headingMd">
+                    ${summary.total_revenue.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                  </Text>
+                </BlockStack>
+              </Card>
+
+              {summary.profit_data_available && (
+                <Card>
+                  <BlockStack gap="200">
+                    <Text as="p" variant="bodySm" tone="subdued">
+                      Total Profit
+                    </Text>
+                    <Text as="p" variant="headingMd">
+                      ${(summary.total_profit ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                    </Text>
+                  </BlockStack>
+                </Card>
+              )}
+
+              <Card>
+                <BlockStack gap="200">
+                  <Text as="p" variant="bodySm" tone="subdued">
+                    Avg Revenue/Customer
+                  </Text>
+                  <Text as="p" variant="headingMd">
+                    ${summary.avg_revenue_per_customer.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                  </Text>
+                </BlockStack>
+              </Card>
+            </InlineStack>
+
+            {/* Data Table */}
+            <DataTable
+              columnContentTypes={['text', 'numeric', 'numeric', 'numeric', 'numeric', 'text']}
+              headings={headings}
+              rows={rows}
+              sortable={[true, true, true, true, true, true]}
+              defaultSortDirection="descending"
+              initialSortColumnIndex={2} // Sort by revenue by default
+              onSort={handleSort}
+            />
+          </BlockStack>
+        </Card>
+      </div>
+    );
+  };
+
   const renderCharts = () => {
     if (syncStatus?.status !== 'completed' || chartData.length === 0)
       return null;
@@ -584,6 +864,9 @@ function AppContent() {
               <COGSManagement shopDomain={shop} />
             </div>
           )}
+
+          {/* Customer Leaderboard */}
+          {syncStatus?.status === 'completed' && renderCustomerLeaderboard()}
 
           {renderCharts()}
         </div>
