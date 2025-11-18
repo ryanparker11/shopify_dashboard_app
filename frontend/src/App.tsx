@@ -247,6 +247,9 @@ function AppContent() {
   const resolveExportUrl = (exportUrl?: string) => {
     if (!exportUrl) return null;
 
+    // If it already starts with /analytics/, keep it as is
+    if (exportUrl.startsWith('/analytics/')) return `/api${exportUrl}`;
+
     if (exportUrl.startsWith('/charts')) return `/api${exportUrl}`;
 
     if (exportUrl.startsWith('/api/')) return exportUrl;
