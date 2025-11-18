@@ -542,6 +542,9 @@ async def export_chart_excel(shop_domain: str, chart_key: str):
                         df['Total Profit'] = df['Total Profit'].apply(lambda x: float(x) if x else 0.0)
                     if 'Avg Order Value' in df.columns:
                         df['Avg Order Value'] = df['Avg Order Value'].apply(lambda x: float(x) if x else 0.0)
+                    # FIX: Convert timezone-aware datetime to timezone-naive
+                    if 'Last Order Date' in df.columns:
+                        df['Last Order Date'] = pd.to_datetime(df['Last Order Date']).dt.tz_localize(None)
 
             else:
                 raise HTTPException(404, f"Unknown chart_key: {chart_key}")
