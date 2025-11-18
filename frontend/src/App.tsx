@@ -21,7 +21,7 @@ import { COGSManagement } from './components/COGSManagement';
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode} from 'react';
 import Plot from 'react-plotly.js';
-import { authenticatedFetch } from './lib/api';
+import { authenticatedFetch, authenticatedBlobFetch } from './lib/api';
 
 // Add type declaration for Shopify CDN
 declare global {
@@ -256,90 +256,76 @@ function AppContent() {
     return `/api/${exportUrl.replace(/^\/+/, '')}`;
   };
 
-  const downloadChart = async (chart: ChartData) => {
-    try {
-      const url = resolveExportUrl(chart.export_url);
-      if (!url) {
-        console.error('No export URL for chart:', chart);
-        return;
-      }
-
-      console.log('Attempting to download from:', url);
-
-      const response = await fetch(`${import.meta.env.VITE_API_BASE}${url}`);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Download failed with error:', errorText);
-        throw new Error(`Export failed: ${response.status} - ${errorText}`);
-      }
-
-      const blob = await response.blob();
-      console.log('Blob created, size:', blob.size, 'type:', blob.type);
-
-      const filename = `${chart.key || 'chart'}_${new Date()
-        .toISOString()
-        .slice(0, 10)}.xlsx`.replace(/\s+/g, '_');
-
-      const objectUrl = window.URL.createObjectURL(blob);
-
-      const a = document.createElement('a');
-      a.href = objectUrl;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-
-      window.URL.revokeObjectURL(objectUrl);
-
-      console.log('Download completed successfully');
-    } catch (err) {
-      console.error('Download error:', err);
-      alert(
-        `Failed to download chart data: ${
-          err instanceof Error ? err.message : 'Unknown error'
-        }`
-      );
+const downloadChart = async (chart: ChartData) => {
+  try {
+    const url = resolveExportUrl(chart.export_url);
+    if (!url) {
+      console.error('No export URL for chart:', chart);
+      return;
     }
-  };
+
+    console.log('Attempting to download from:', url);
+
+    const blob = await authenticatedBlobFetch(url);
+    console.log('Blob created, size:', blob.size, 'type:', blob.type);
+
+    const filename = `${chart.key || 'chart'}_${new Date()
+      .toISOString()
+      .slice(0, 10)}.xlsx`.replace(/\s+/g, '_');
+
+    const objectUrl = window.URL.createObjectURL(blob);
+
+    const a = document.createElement('a');
+    a.href = objectUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+
+    window.URL.revokeObjectURL(objectUrl);
+
+    console.log('Download completed successfully');
+  } catch (err) {
+    console.error('Download error:', err);
+    alert(
+      `Failed to download chart data: ${
+        err instanceof Error ? err.message : 'Unknown error'
+      }`
+    );
+  }
+};
 
   const downloadCustomerLeaderboard = async () => {
-    if (!shop) return;
+  if (!shop) return;
 
-    try {
-      const url = `/api/charts/${encodeURIComponent(shop)}/export/top_customers`;
-      console.log('Attempting to download customer leaderboard from:', url);
+  try {
+    const url = `/api/charts/${encodeURIComponent(shop)}/export/top_customers`;
+    console.log('Attempting to download customer leaderboard from:', url);
 
-      const response = await fetch(`${import.meta.env.VITE_API_BASE}${url}`);
+    const blob = await authenticatedBlobFetch(url);
+    console.log('Blob created, size:', blob.size, 'type:', blob.type);
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Download failed with error:', errorText);
-        throw new Error(`Export failed: ${response.status} - ${errorText}`);
-      }
+    const filename = `customer_leaderboard_${new Date().toISOString().slice(0, 10)}.xlsx`;
 
-      const blob = await response.blob();
-      const filename = `customer_leaderboard_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    const objectUrl = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = objectUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(objectUrl);
 
-      const objectUrl = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = objectUrl;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(objectUrl);
-
-      console.log('Customer leaderboard download completed successfully');
-    } catch (err) {
-      console.error('Download error:', err);
-      alert(
-        `Failed to download customer leaderboard: ${
-          err instanceof Error ? err.message : 'Unknown error'
-        }`
-      );
-    }
-  };
+    console.log('Customer leaderboard download completed successfully');
+  } catch (err) {
+    console.error('Download error:', err);
+    alert(
+      `Failed to download customer leaderboard: ${
+        err instanceof Error ? err.message : 'Unknown error'
+      }`
+    );
+  }
+};
 
   // --------------------------------------------------------------------
   // Effect: initial sync-status polling + initial data fetches
