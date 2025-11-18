@@ -1021,6 +1021,285 @@ async def sync_product_variants(shop: str, shop_id: int, access_token: str):
             f"✅ Variant sync complete: {total_variants} variants ({errors} errors)"
         )
 
+# ============================================================================
+# NEW FUNCTION: Customer Sync using Bulk Operations API
+# ============================================================================
+async def sync_customers(shop: str, shop_id: int, access_token: str):
+    """
+    Fetch ALL customers using Shopify Bulk Operations API (GraphQL).
+    Much faster than REST pagination - no rate limits!
+    """
+    print(f"🔄 Starting bulk customer sync for {shop}")
+
+    from commerce_app.core.db import get_conn
+
+    bulk_query = """
+    {
+      customers {
+        edges {
+          node {
+            id
+            email
+            firstName
+            lastName
+            phone
+            emailMarketingConsent {
+              marketingState
+            }
+            createdAt
+            updatedAt
+            ordersCount
+            totalSpentSet {
+              shopMoney {
+                amount
+                currencyCode
+              }
+            }
+            state
+          }
+        }
+      }
+    }
+    """
+
+    # Escape for GraphQL mutation
+    escaped_query = (
+        bulk_query.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
+    )
+
+    mutation = f'''
+    mutation {{
+      bulkOperationRunQuery(query: "{escaped_query}") {{
+        bulkOperation {{ id status }}
+        userErrors {{ field message }}
+      }}
+    }}
+    '''
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        # Start bulk operation
+        try:
+            response = await client.post(
+                f"https://{shop}/admin/api/2025-10/graphql.json",
+                headers={
+                    "X-Shopify-Access-Token": access_token,
+                    "Content-Type": "application/json",
+                },
+                json={"query": mutation},
+            )
+
+            if response.status_code != 200:
+                print(f"Failed to start customer bulk operation: {response.text}")
+                return
+
+            data = response.json()
+
+            if (
+                "errors" in data
+                or data.get("data", {})
+                .get("bulkOperationRunQuery", {})
+                .get("userErrors")
+            ):
+                print(f"GraphQL errors: {data}")
+                return
+
+            operation_id = data["data"]["bulkOperationRunQuery"]["bulkOperation"]["id"]
+            print(f"✅ Started customer bulk operation: {operation_id}")
+
+        except Exception as e:
+            print(f"Error starting customer bulk operation: {e}")
+            return
+
+        # Poll for completion
+        status_query = """
+        query {
+          node(id: "%s") {
+            ... on BulkOperation {
+              id
+              status
+              errorCode
+              objectCount
+              url
+              partialDataUrl
+            }
+          }
+        }
+        """ % operation_id
+
+        jsonl_url = None
+        max_wait = 600  # 10 minutes
+        start_time = asyncio.get_event_loop().time()
+
+        while True:
+            if asyncio.get_event_loop().time() - start_time > max_wait:
+                print("Customer bulk operation timed out")
+                return
+
+            await asyncio.sleep(2)
+
+            try:
+                response = await client.post(
+                    f"https://{shop}/admin/api/2025-10/graphql.json",
+                    headers={
+                        "X-Shopify-Access-Token": access_token,
+                        "Content-Type": "application/json",
+                    },
+                    json={"query": status_query},
+                )
+
+                if response.status_code != 200:
+                    continue
+
+                data = response.json()
+                operation = data.get("data", {}).get("node", {})
+                status = operation.get("status")
+
+                print(
+                    f"📊 Customer sync status: {status} ({operation.get('objectCount', 0)} objects)"
+                )
+
+                if status == "COMPLETED":
+                    jsonl_url = operation.get("url")
+                    print("✅ Customer bulk operation completed")
+                    break
+                elif status in ["FAILED", "CANCELED", "EXPIRED"]:
+                    print(f"Customer sync failed: {status}")
+                    jsonl_url = operation.get("partialDataUrl")
+                    break
+
+            except Exception as e:
+                print(f"Error polling customer bulk operation: {e}")
+                continue
+
+        if not jsonl_url:
+            print("No customer data URL")
+            return
+
+        # Download and process
+        print("📥 Downloading customer data...")
+        try:
+            response = await client.get(jsonl_url, timeout=120.0)
+
+            if response.status_code != 200:
+                print(f"Failed to download customer data: {response.status_code}")
+                return
+
+        except Exception as e:
+            print(f"Error downloading customer data: {e}")
+            return
+
+        lines = response.text.strip().split("\n")
+        total_customers = 0
+        errors = 0
+
+        async with get_conn() as conn:
+            async with conn.cursor() as cur:
+                for line in lines:
+                    if not line.strip():
+                        continue
+
+                    try:
+                        customer = json.loads(line)
+                        customer_id = customer.get("id", "").split("/")[-1]
+                        
+                        # Parse email marketing consent
+                        marketing_consent = customer.get("emailMarketingConsent", {})
+                        accepts_marketing = marketing_consent.get("marketingState") == "SUBSCRIBED"
+
+                        # Insert/update customer
+                        await cur.execute(
+                            """
+                            INSERT INTO shopify.customers (
+                                shop_id, customer_id, email, first_name, last_name,
+                                accepts_marketing, created_at, updated_at, phone,
+                                total_spent, orders_count, state, raw_json
+                            ) VALUES (
+                                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                            )
+                            ON CONFLICT (shop_id, customer_id)
+                            DO UPDATE SET
+                                email = EXCLUDED.email,
+                                first_name = EXCLUDED.first_name,
+                                last_name = EXCLUDED.last_name,
+                                accepts_marketing = EXCLUDED.accepts_marketing,
+                                updated_at = EXCLUDED.updated_at,
+                                phone = EXCLUDED.phone,
+                                total_spent = EXCLUDED.total_spent,
+                                orders_count = EXCLUDED.orders_count,
+                                state = EXCLUDED.state,
+                                raw_json = EXCLUDED.raw_json
+                            """,
+                            (
+                                shop_id,
+                                int(customer_id),
+                                customer.get("email"),
+                                customer.get("firstName"),
+                                customer.get("lastName"),
+                                accepts_marketing,
+                                customer.get("createdAt"),
+                                customer.get("updatedAt"),
+                                customer.get("phone"),
+                                float(customer.get("totalSpentSet", {})
+                                    .get("shopMoney", {})
+                                    .get("amount", 0)),
+                                int(customer.get("ordersCount", 0)),
+                                customer.get("state"),
+                                json.dumps(customer),  # Store full JSON for reference
+                            ),
+                        )
+
+                        total_customers += 1
+
+                        # Commit in batches of 100 for performance
+                        if total_customers % 100 == 0:
+                            await conn.commit()
+                            print(f"👥 Processed {total_customers} customers...")
+
+                    except Exception as e:
+                        print(f"Error processing customer line: {e}")
+                        errors += 1
+                        await conn.rollback()
+                        continue
+
+                # Final commit
+                await conn.commit()
+
+        print(
+            f"✅ Customer sync complete: {total_customers} customers imported ({errors} errors)"
+        )
+
+
+@router.post("/sync-customers/{shop_domain}")
+async def trigger_customer_sync(
+    shop_domain: str, background_tasks: BackgroundTasks
+):
+    """
+    Manually trigger a customer sync for a shop.
+    Useful for backfilling missing customers or re-syncing.
+    """
+    conn = db()
+    with conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT shop_id, access_token FROM shopify.shops WHERE shop_domain = %s",
+            (shop_domain,),
+        )
+        row = cur.fetchone()
+
+        if not row:
+            raise HTTPException(404, "Shop not found")
+
+        shop_id = row["shop_id"]
+        access_token = row["access_token"]
+
+    # Run sync in background
+    background_tasks.add_task(
+        sync_customers, shop_domain, shop_id, access_token
+    )
+
+    return {
+        "status": "started",
+        "message": f"Customer sync started for {shop_domain}",
+    }
 
 # ============================================================================
 # NEW FUNCTION: Order Line Items Sync
@@ -1582,6 +1861,7 @@ async def auth_callback(request: Request, background_tasks: BackgroundTasks):
         # Run all sync tasks in background
         background_tasks.add_task(initial_data_sync, shop, shop_id, access_token)
         background_tasks.add_task(sync_products, shop, shop_id, access_token)
+        background_tasks.add_task(sync_customers, shop, shop_id, access_token)
         background_tasks.add_task(
             sync_order_line_items, shop, shop_id, access_token
         )
