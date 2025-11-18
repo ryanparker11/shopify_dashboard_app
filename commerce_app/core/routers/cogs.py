@@ -1,589 +1,349 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile, File
 from fastapi.responses import StreamingResponse
 from commerce_app.core.db import get_conn
-from typing import List, Dict, Any
-from io import BytesIO
-from datetime import datetime
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment
 import pandas as pd
+import io
+from typing import List, Dict, Any
+from datetime import datetime
 
 router = APIRouter()
 
-@router.get("/orders/summary")
-async def orders_summary(shop_domain: str):
+@router.get("/cogs/download-template")
+async def download_cogs_template(shop_domain: str):
+    """
+    Generate and download COGS upload template with VARIANT_ID, SKU, NAME, and VARIANT pre-filled.
+    User only needs to fill in the COGS column.
+    Uses variant_id as the primary key for matching.
+    """
+    try:
+        # Fetch products and variants from database
+        sql = """
+        SELECT 
+            pv.variant_id,
+            pv.sku,
+            p.title as product_name,
+            pv.title as variant_title
+        FROM shopify.product_variants pv
+        JOIN shopify.products p ON pv.product_id = p.product_id
+        WHERE p.shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
+        ORDER BY p.title, pv.title;
+        """
+        
+        async with get_conn() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(sql, (shop_domain,))
+                products_data = await cur.fetchall()
+                
+                if not products_data:
+                    raise HTTPException(404, "No products found for this shop")
+        
+        # Generate Excel template
+        wb = Workbook()
+        sheet = wb.active
+        sheet.title = "COGS Upload"
+        
+        # Header row styling
+        headers = ['VARIANT_ID', 'SKU', 'NAME', 'VARIANT', 'COGS']
+        for col, header in enumerate(headers, start=1):
+            cell = sheet.cell(row=1, column=col, value=header)
+            cell.font = Font(bold=True, color='FFFFFF')
+            cell.fill = PatternFill('solid', start_color='4472C4')
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+        
+        # Set column widths
+        sheet.column_dimensions['A'].width = 15  # VARIANT_ID
+        sheet.column_dimensions['B'].width = 20  # SKU
+        sheet.column_dimensions['C'].width = 40  # NAME
+        sheet.column_dimensions['D'].width = 30  # VARIANT
+        sheet.column_dimensions['E'].width = 15  # COGS
+        
+        # Populate data rows
+        for row_idx, (variant_id, sku, product_name, variant_title) in enumerate(products_data, start=2):
+            sheet.cell(row=row_idx, column=1, value=variant_id)
+            sheet.cell(row=row_idx, column=2, value=sku or '')
+            sheet.cell(row=row_idx, column=3, value=product_name or '')
+            sheet.cell(row=row_idx, column=4, value=variant_title if variant_title != 'Default Title' else 'Default')
+            
+            # COGS column - yellow highlight for user input
+            cogs_cell = sheet.cell(row=row_idx, column=5)
+            cogs_cell.fill = PatternFill('solid', start_color='FFFF00')
+        
+        # Freeze header row
+        sheet.freeze_panes = 'A2'
+        
+        # Save to BytesIO
+        output = io.BytesIO()
+        wb.save(output)
+        output.seek(0)
+        
+        # Return as downloadable file
+        return StreamingResponse(
+            output,
+            media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            headers={
+                'Content-Disposition': 'attachment; filename=cogs_upload_template.xlsx'
+            }
+        )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating template: {str(e)}")
+
+
+@router.get("/cogs/summary")
+async def cogs_summary(shop_domain: str):
+    """
+    Get COGS summary statistics for the shop
+    """
     sql = """
     SELECT
-      COUNT(*)::int                         AS total_orders,
-      COALESCE(SUM(total_price),0)::numeric AS total_revenue,
-      ROUND(AVG(NULLIF(total_price,0))::numeric,2) AS avg_order_value
-    FROM shopify.orders
-    WHERE shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s);
+        COUNT(DISTINCT pv.variant_id)::int AS total_variants,
+        COUNT(DISTINCT CASE WHEN pv.cost IS NOT NULL THEN pv.variant_id END)::int AS variants_with_cogs,
+        COALESCE(AVG(pv.cost), 0)::numeric AS avg_cogs
+    FROM shopify.product_variants pv
+    JOIN shopify.products p ON pv.product_id = p.product_id
+    WHERE p.shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s);
     """
+    
     async with get_conn() as conn:
         async with conn.cursor() as cur:
             await cur.execute(sql, (shop_domain,))
             row = await cur.fetchone()
             if row is None:
                 raise HTTPException(404, "Shop not found")
-            total_orders, total_revenue, aov = row
-            return {
-                "total_orders": int(total_orders),
-                "total_revenue": float(total_revenue) if total_revenue is not None else 0.0,
-                "avg_order_value": float(aov) if aov is not None else 0.0,
-            }
-
-@router.get("/orders/revenue-by-day")
-async def revenue_by_day(shop_domain: str, days: int = 30):
-    sql = """
-    SELECT order_date::text, COALESCE(gross_revenue,0)::numeric
-    FROM shopify.v_order_daily
-    WHERE shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
-      AND order_date >= current_date - %s::int
-    ORDER BY order_date;
-    """
-    async with get_conn() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(sql, (shop_domain, days))
-            rows = await cur.fetchall()
-            return [{"date": d, "revenue": float(r)} for d, r in rows]
-
-
-@router.get("/customers/leaderboard")
-async def customer_leaderboard(shop_domain: str, limit: int = 50):
-    """
-    Customer leaderboard with revenue, orders, profit, AOV, and last order date.
-    Profit is calculated using the same logic as cogs.py - matching COGS via variant_id.
-    Filters out line items with NULL variant_id to ensure accurate COGS matching.
-    """
-    sql = """
-    WITH customer_metrics AS (
-        SELECT 
-            c.customer_id,
-            COALESCE(c.email, 'No Email') as customer_email,
-            COALESCE(
-                NULLIF(TRIM(c.first_name || ' ' || c.last_name), ''),
-                c.email,
-                'Guest Customer'
-            ) as customer_name,
-            COUNT(DISTINCT o.order_id)::int as total_orders,
-            COALESCE(SUM(o.total_price), 0)::numeric as total_revenue,
-            MAX(o.created_at) as last_order_date,
-            -- Calculate profit using same logic as cogs.py
-            COALESCE(
-                SUM(li.quantity * li.price) - SUM(li.quantity * COALESCE(pv.cost, 0)),
-                0
-            )::numeric as total_profit,
-            -- Count items with COGS data
-            COUNT(DISTINCT CASE WHEN pv.cost IS NOT NULL THEN li.line_number END)::int as items_with_cogs,
-            COUNT(DISTINCT CASE WHEN li.variant_id IS NOT NULL THEN li.line_number END)::int as total_items
-        FROM shopify.customers c
-        LEFT JOIN shopify.orders o ON c.customer_id = o.customer_id AND c.shop_id = o.shop_id
-        LEFT JOIN shopify.order_line_items li ON o.order_id = li.order_id AND o.shop_id = li.shop_id
-        LEFT JOIN shopify.product_variants pv ON li.variant_id = pv.variant_id AND li.shop_id = pv.shop_id
-        WHERE c.shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
-          AND LOWER(COALESCE(o.financial_status,'')) IN ('paid', 'partially_paid', '')
-          AND (li.variant_id IS NOT NULL OR li.line_number IS NULL)
-        GROUP BY c.customer_id, c.email, c.first_name, c.last_name
-    )
-    SELECT 
-        customer_id,
-        customer_name,
-        customer_email,
-        total_orders,
-        total_revenue,
-        total_profit,
-        CASE 
-            WHEN total_orders > 0 THEN ROUND((total_revenue / total_orders)::numeric, 2)
-            ELSE 0
-        END as avg_order_value,
-        last_order_date,
-        -- Indicate if profit data is complete, partial, or unavailable
-        CASE 
-            WHEN items_with_cogs = 0 THEN 'unavailable'
-            WHEN items_with_cogs = total_items THEN 'complete'
-            ELSE 'partial'
-        END as profit_data_status,
-        items_with_cogs,
-        total_items
-    FROM customer_metrics
-    WHERE total_orders > 0  -- Only include customers who have placed orders
-    ORDER BY total_revenue DESC
-    LIMIT %s;
-    """
-    
-    async with get_conn() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(sql, (shop_domain, limit))
-            rows = await cur.fetchall()
             
-            if not rows:
-                return {
-                    "customers": [],
-                    "summary": {
-                        "total_customers": 0,
-                        "total_revenue": 0.0,
-                        "total_profit": 0.0,
-                        "profit_data_available": False
-                    }
-                }
-            
-            customers = []
-            total_revenue = 0.0
-            total_profit = 0.0
-            has_any_cogs = False
-            
-            for row in rows:
-                customer_id, customer_name, customer_email, total_orders, revenue, profit, aov, last_order, profit_status, items_with_cogs, total_items = row
-                
-                total_revenue += float(revenue)
-                total_profit += float(profit)
-                
-                if profit_status != 'unavailable':
-                    has_any_cogs = True
-                
-                customers.append({
-                    "customer_id": customer_id,
-                    "customer_name": customer_name,
-                    "customer_email": customer_email,
-                    "total_orders": total_orders,
-                    "total_revenue": float(revenue),
-                    "total_profit": float(profit) if profit_status != 'unavailable' else None,
-                    "avg_order_value": float(aov),
-                    "last_order_date": last_order.isoformat() if last_order else None,
-                    "profit_data_status": profit_status,
-                    "profit_coverage": f"{items_with_cogs}/{total_items} items" if profit_status != 'unavailable' else None
-                })
+            total_variants, variants_with_cogs, avg_cogs = row
             
             return {
-                "customers": customers,
-                "summary": {
-                    "total_customers": len(customers),
-                    "total_revenue": round(total_revenue, 2),
-                    "total_profit": round(total_profit, 2) if has_any_cogs else None,
-                    "profit_data_available": has_any_cogs,
-                    "avg_revenue_per_customer": round(total_revenue / len(customers), 2) if customers else 0.0,
-                    "avg_profit_per_customer": round(total_profit / len(customers), 2) if has_any_cogs and customers else None
-                }
+                "total_variants": total_variants,
+                "variants_with_cogs": variants_with_cogs,
+                "variants_without_cogs": total_variants - variants_with_cogs,
+                "avg_cogs": float(avg_cogs) if avg_cogs else 0.0,
+                "cogs_coverage_percentage": round((variants_with_cogs / total_variants * 100), 2) if total_variants > 0 else 0.0
             }
 
 
-@router.get("/charts/{shop_domain}")
-async def get_charts(shop_domain: str) -> Dict[str, List[Dict[str, Any]]]:
+@router.post("/cogs/upload-template")
+async def upload_cogs_template(shop_domain: str, file: UploadFile = File(...)):
     """
-    Generate Plotly chart data for a specific shop, and include export URLs.
-    """
-    try:
-        charts: List[Dict[str, Any]] = []
-
-        async with get_conn() as conn:
-            # Chart 1: Monthly Revenue (Bar Chart)
-            monthly_sql = """
-            SELECT 
-                TO_CHAR(created_at, 'YYYY-MM') as month,
-                COALESCE(SUM(total_price), 0)::numeric as revenue
-            FROM shopify.orders
-            WHERE shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
-              AND created_at >= NOW() - INTERVAL '12 months'
-            GROUP BY TO_CHAR(created_at, 'YYYY-MM')
-            ORDER BY month;
-            """
-            async with conn.cursor() as cur:
-                await cur.execute(monthly_sql, (shop_domain,))
-                monthly_data = await cur.fetchall()
-
-                if monthly_data:
-                    charts.append({
-                        "key": "monthly_revenue",
-                        "data": [{
-                            "x": [row[0] for row in monthly_data],
-                            "y": [float(row[1]) for row in monthly_data],
-                            "type": "bar",
-                            "name": "Monthly Revenue",
-                            "marker": {"color": "#008060"}
-                        }],
-                        "layout": {
-                            "title": "Revenue Over Time (Last 12 Months)",
-                            "xaxis": {"title": "Month"},
-                            "yaxis": {"title": "Revenue ($)"}
-                        },
-                        "export_url": f"/analytics/charts/{shop_domain}/export/monthly_revenue"
-                    })
-
-            # Chart 2: Top 5 Products (% of Total Revenue) with "Other"
-            total_rev_sql = """
-            SELECT COALESCE(SUM(li.quantity * li.price), 0)::numeric AS total_rev
-            FROM shopify.order_line_items li
-            JOIN shopify.orders o ON li.order_id = o.order_id AND li.shop_id = o.shop_id
-            WHERE o.shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s);
-            """
-            top5_sql = """
-            SELECT 
-                li.title AS product_name,
-                COALESCE(SUM(li.quantity * li.price), 0)::numeric AS total_revenue
-            FROM shopify.order_line_items li
-            JOIN shopify.orders o ON li.order_id = o.order_id AND li.shop_id = o.shop_id
-            WHERE o.shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
-            GROUP BY li.title
-            ORDER BY total_revenue DESC
-            LIMIT 5;
-            """
-            async with conn.cursor() as cur:
-                # total shop revenue across ALL products
-                await cur.execute(total_rev_sql, (shop_domain,))
-                total_row = await cur.fetchone()
-                total_rev = float(total_row[0]) if total_row and total_row[0] is not None else 0.0
-
-                # top 5 products by revenue
-                await cur.execute(top5_sql, (shop_domain,))
-                top5_rows = await cur.fetchall()
-
-                if total_rev > 0 and top5_rows:
-                    labels = [r[0] for r in top5_rows]
-                    values = [float(r[1]) for r in top5_rows]
-
-                    other = max(total_rev - sum(values), 0.0)
-                    if other > 0.000001:  # avoid tiny rounding negatives
-                        labels.append("Other")
-                        values.append(other)
-
-                    charts.append({
-                        "key": "top_products_revenue",
-                        "data": [{
-                            "values": values,              # raw revenue incl. "Other"
-                            "labels": labels,
-                            "type": "pie",
-                            "hole": 0.3,
-                            "textinfo": "label+percent",
-                            "insidetextorientation": "auto"
-                        }],
-                        "layout": {
-                            "title": "Top 5 Products (% of Revenue)"
-                        },
-                        "export_url": f"/analytics/charts/{shop_domain}/export/top_products_revenue"
-                    })
-
-            # Chart 3: Daily Orders (Line Chart) - Last 30 days
-            daily_orders_sql = """
-            SELECT 
-                DATE(created_at) as order_date,
-                COUNT(*)::int as order_count
-            FROM shopify.orders
-            WHERE shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
-              AND created_at >= NOW() - INTERVAL '30 days'
-            GROUP BY DATE(created_at)
-            ORDER BY order_date;
-            """
-            async with conn.cursor() as cur:
-                await cur.execute(daily_orders_sql, (shop_domain,))
-                daily_data = await cur.fetchall()
-
-                if daily_data:
-                    charts.append({
-                        "key": "daily_orders_30d",
-                        "data": [{
-                            "x": [row[0].strftime('%Y-%m-%d') for row in daily_data],
-                            "y": [int(row[1]) for row in daily_data],
-                            "type": "scatter",
-                            "mode": "lines+markers",
-                            "name": "Daily Orders",
-                            "line": {"color": "#5C6AC4", "width": 2},
-                            "marker": {"size": 6}
-                        }],
-                        "layout": {
-                            "title": "Orders Over Time (Last 30 Days)",
-                            "xaxis": {"title": "Date"},
-                            "yaxis": {"title": "Number of Orders"}
-                        },
-                        "export_url": f"/analytics/charts/{shop_domain}/export/daily_orders_30d"
-                    })
-
-            # Chart 4: Revenue by Day (using your existing view)
-            revenue_sql = """
-            SELECT order_date::text, COALESCE(gross_revenue,0)::numeric
-            FROM shopify.v_order_daily
-            WHERE shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
-              AND order_date >= current_date - 30
-            ORDER BY order_date;
-            """
-            async with conn.cursor() as cur:
-                await cur.execute(revenue_sql, (shop_domain,))
-                revenue_data = await cur.fetchall()
-
-                if revenue_data:
-                    charts.append({
-                        "key": "daily_revenue_30d",
-                        "data": [{
-                            "x": [row[0] for row in revenue_data],
-                            "y": [float(row[1]) for row in revenue_data],
-                            "type": "scatter",
-                            "mode": "lines",
-                            "name": "Daily Revenue",
-                            "line": {"color": "#008060", "width": 2},
-                            "fill": "tozeroy"
-                        }],
-                        "layout": {
-                            "title": "Daily Revenue (Last 30 Days)",
-                            "xaxis": {"title": "Date"},
-                            "yaxis": {"title": "Revenue ($)"}
-                        },
-                        "export_url": f"/analytics/charts/{shop_domain}/export/daily_revenue_30d"
-                    })
-
-            # Chart 5: Top Customers by Revenue
-            top_customers_sql = """
-            WITH customer_metrics AS (
-                SELECT 
-                    c.customer_id,
-                    COALESCE(
-                        NULLIF(TRIM(c.first_name || ' ' || c.last_name), ''),
-                        c.email,
-                        'Guest Customer'
-                    ) as customer_name,
-                    COALESCE(SUM(o.total_price), 0)::numeric as total_revenue
-                FROM shopify.customers c
-                LEFT JOIN shopify.orders o ON c.customer_id = o.customer_id AND c.shop_id = o.shop_id
-                WHERE c.shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
-                  AND LOWER(COALESCE(o.financial_status,'')) IN ('paid', 'partially_paid', '')
-                GROUP BY c.customer_id, c.email, c.first_name, c.last_name
-                HAVING COUNT(DISTINCT o.order_id) > 0
-            )
-            SELECT customer_name, total_revenue
-            FROM customer_metrics
-            ORDER BY total_revenue DESC
-            LIMIT 10;
-            """
-            async with conn.cursor() as cur:
-                await cur.execute(top_customers_sql, (shop_domain,))
-                customer_data = await cur.fetchall()
-
-                if customer_data:
-                    charts.append({
-                        "key": "top_customers",
-                        "data": [{
-                            "x": [row[0] for row in customer_data],
-                            "y": [float(row[1]) for row in customer_data],
-                            "type": "bar",
-                            "name": "Revenue",
-                            "marker": {"color": "#008060"}
-                        }],
-                        "layout": {
-                            "title": "Top 10 Customers by Revenue",
-                            "xaxis": {"title": "Customer"},
-                            "yaxis": {"title": "Total Revenue ($)"}
-                        },
-                        "export_url": f"/analytics/charts/{shop_domain}/export/top_customers"
-                    })
-
-        if not charts:
-            raise HTTPException(status_code=404, detail="No data found for this shop")
-
-        return {"charts": charts}
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error generating charts: {str(e)}")
-
-
-@router.get("/charts/{shop_domain}/export/{chart_key}")
-async def export_chart_excel(shop_domain: str, chart_key: str):
-    """
-    Export the underlying dataset for a chart as an Excel file.
-    Valid chart_key values:
-      - monthly_revenue
-      - top_products_revenue
-      - daily_orders_30d
-      - daily_revenue_30d
-      - top_customers
+    Upload completed COGS template and update product costs.
+    Uses VARIANT_ID as the primary matching key (more reliable than SKU).
+    This will overwrite existing COGS data.
     """
     try:
+        # Validate file type
+        if not file.filename.endswith(('.xlsx', '.xls')):
+            raise HTTPException(400, "File must be an Excel file (.xlsx or .xls)")
+        
+        # Read the uploaded file
+        contents = await file.read()
+        df = pd.read_excel(io.BytesIO(contents))
+        
+        # Validate required columns
+        required_columns = ['VARIANT_ID', 'COGS']
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        if missing_columns:
+            raise HTTPException(400, f"Missing required columns: {', '.join(missing_columns)}")
+        
+        # Clean the data
+        df = df.dropna(subset=['VARIANT_ID', 'COGS'])  # Remove rows without VARIANT_ID or COGS
+        df['VARIANT_ID'] = pd.to_numeric(df['VARIANT_ID'], errors='coerce', downcast='integer')
+        df['COGS'] = pd.to_numeric(df['COGS'], errors='coerce')
+        df = df.dropna(subset=['VARIANT_ID', 'COGS'])  # Remove rows where conversion failed
+        
+        if len(df) == 0:
+            raise HTTPException(400, "No valid COGS data found in the file")
+        
+        # Get shop_id
         async with get_conn() as conn:
-            if chart_key == "monthly_revenue":
-                sql = """
-                SELECT 
-                    TO_CHAR(created_at, 'YYYY-MM') as month,
-                    COALESCE(SUM(total_price), 0)::numeric as revenue
-                FROM shopify.orders
-                WHERE shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
-                  AND created_at >= NOW() - INTERVAL '12 months'
-                GROUP BY TO_CHAR(created_at, 'YYYY-MM')
-                ORDER BY month;
-                """
-                async with conn.cursor() as cur:
-                    await cur.execute(sql, (shop_domain,))
-                    rows = await cur.fetchall()
-                df = pd.DataFrame(rows, columns=["month", "revenue"])
-
-            elif chart_key == "top_products_revenue":
-                total_sql = """
-                SELECT COALESCE(SUM(li.quantity * li.price), 0)::numeric AS total_rev
-                FROM shopify.order_line_items li
-                JOIN shopify.orders o ON li.order_id = o.order_id AND li.shop_id = o.shop_id
-                WHERE o.shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s);
-                """
-                top5_sql = """
-                SELECT li.title AS product_name, COALESCE(SUM(li.quantity * li.price), 0)::numeric AS total_revenue
-                FROM shopify.order_line_items li
-                JOIN shopify.orders o ON li.order_id = o.order_id AND li.shop_id = o.shop_id
-                WHERE o.shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
-                GROUP BY li.title
-                ORDER BY total_revenue DESC
-                LIMIT 5;
-                """
-                async with conn.cursor() as cur:
-                    await cur.execute(total_sql, (shop_domain,))
-                    total = float((await cur.fetchone())[0] or 0.0)
-                    await cur.execute(top5_sql, (shop_domain,))
-                    top5 = await cur.fetchall()
-
-                labels = [r[0] for r in top5]
-                values = [float(r[1]) for r in top5]
-                other = max(total - sum(values), 0.0)
-                if other > 0.000001:
-                    labels.append("Other")
-                    values.append(other)
-
-                pct = [(v / total) * 100.0 if total else 0.0 for v in values]
-                df = pd.DataFrame({
-                    "product_name": labels,
-                    "revenue": values,
-                    "percent_of_total": pct
-                })
-
-            elif chart_key == "daily_orders_30d":
-                sql = """
-                SELECT DATE(created_at) as order_date, COUNT(*)::int as order_count
-                FROM shopify.orders
-                WHERE shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
-                  AND created_at >= NOW() - INTERVAL '30 days'
-                GROUP BY DATE(created_at)
-                ORDER BY order_date;
-                """
-                async with conn.cursor() as cur:
-                    await cur.execute(sql, (shop_domain,))
-                    rows = await cur.fetchall()
-                df = pd.DataFrame(rows, columns=["order_date", "order_count"])
-
-            elif chart_key == "daily_revenue_30d":
-                sql = """
-                SELECT order_date::date, COALESCE(gross_revenue,0)::numeric
-                FROM shopify.v_order_daily
-                WHERE shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
-                  AND order_date >= current_date - 30
-                ORDER BY order_date;
-                """
-                async with conn.cursor() as cur:
-                    await cur.execute(sql, (shop_domain,))
-                    rows = await cur.fetchall()
-                df = pd.DataFrame(rows, columns=["order_date", "revenue"])
-
-            elif chart_key == "top_customers":
-                sql = """
-                WITH customer_metrics AS (
-                    SELECT 
-                        c.customer_id,
-                        COALESCE(c.email, 'No Email') as customer_email,
-                        COALESCE(
-                            NULLIF(TRIM(c.first_name || ' ' || c.last_name), ''),
-                            c.email,
-                            'Guest Customer'
-                        ) as customer_name,
-                        COUNT(DISTINCT o.order_id)::int as total_orders,
-                        COALESCE(SUM(o.total_price), 0)::numeric as total_revenue,
-                        MAX(o.created_at) as last_order_date,
-                        -- Calculate profit using same logic as cogs.py
-                        COALESCE(
-                            SUM(li.quantity * li.price) - SUM(li.quantity * COALESCE(pv.cost, 0)),
-                            0
-                        )::numeric as total_profit,
-                        COUNT(DISTINCT CASE WHEN pv.cost IS NOT NULL THEN li.line_number END)::int as items_with_cogs,
-                        COUNT(DISTINCT CASE WHEN li.variant_id IS NOT NULL THEN li.line_number END)::int as total_items
-                    FROM shopify.customers c
-                    LEFT JOIN shopify.orders o ON c.customer_id = o.customer_id AND c.shop_id = o.shop_id
-                    LEFT JOIN shopify.order_line_items li ON o.order_id = li.order_id AND o.shop_id = li.shop_id
-                    LEFT JOIN shopify.product_variants pv ON li.variant_id = pv.variant_id AND li.shop_id = pv.shop_id
-                    WHERE c.shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
-                      AND LOWER(COALESCE(o.financial_status,'')) IN ('paid', 'partially_paid', '')
-                      AND (li.variant_id IS NOT NULL OR li.line_number IS NULL)
-                    GROUP BY c.customer_id, c.email, c.first_name, c.last_name
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "SELECT shop_id FROM shopify.shops WHERE shop_domain = %s",
+                    (shop_domain,)
                 )
-                SELECT 
-                    customer_name as "Customer Name",
-                    customer_email as "Email",
-                    total_orders as "Total Orders",
-                    total_revenue as "Total Revenue",
-                    total_profit as "Total Profit",
-                    CASE 
-                        WHEN total_orders > 0 THEN ROUND((total_revenue / total_orders)::numeric, 2)
-                        ELSE 0
-                    END as "Avg Order Value",
-                    last_order_date as "Last Order Date",
-                    CASE 
-                        WHEN items_with_cogs = 0 THEN 'No COGS Data'
-                        WHEN items_with_cogs = total_items THEN 'Complete'
-                        ELSE 'Partial (' || items_with_cogs || '/' || total_items || ')'
-                    END as "Profit Data Coverage"
-                FROM customer_metrics
-                WHERE total_orders > 0
-                ORDER BY total_revenue DESC
-                LIMIT 50;
-                """
-                async with conn.cursor() as cur:
-                    await cur.execute(sql, (shop_domain,))
-                    rows = await cur.fetchall()
+                shop_row = await cur.fetchone()
+                if not shop_row:
+                    raise HTTPException(404, "Shop not found")
+                shop_id = shop_row[0]
+        
+        # Update COGS for each variant_id
+        updated_count = 0
+        skipped_count = 0
+        errors = []
+        
+        async with get_conn() as conn:
+            async with conn.cursor() as cur:
+                for _, row in df.iterrows():
+                    variant_id = int(row['VARIANT_ID'])
+                    cogs = float(row['COGS'])
                     
-                    # Get column names from cursor description
-                    columns = [desc[0] for desc in cur.description]
+                    try:
+                        # Update product variant cost using variant_id
+                        update_sql = """
+                        UPDATE shopify.product_variants pv
+                        SET cost = %s,
+                            updated_at = NOW()
+                        FROM shopify.products p
+                        WHERE pv.product_id = p.product_id
+                          AND p.shop_id = %s
+                          AND pv.variant_id = %s
+                        """
+                        await cur.execute(update_sql, (cogs, shop_id, variant_id))
+                        
+                        if cur.rowcount > 0:
+                            updated_count += 1
+                        else:
+                            skipped_count += 1
+                            errors.append(f"Variant ID not found: {variant_id}")
                     
-                    # Create DataFrame
-                    df = pd.DataFrame(rows, columns=columns)
-                    
-                    # Format currency columns
-                    if 'Total Revenue' in df.columns:
-                        df['Total Revenue'] = df['Total Revenue'].apply(lambda x: float(x) if x else 0.0)
-                    if 'Total Profit' in df.columns:
-                        df['Total Profit'] = df['Total Profit'].apply(lambda x: float(x) if x else 0.0)
-                    if 'Avg Order Value' in df.columns:
-                        df['Avg Order Value'] = df['Avg Order Value'].apply(lambda x: float(x) if x else 0.0)
-
-            else:
-                raise HTTPException(404, f"Unknown chart_key: {chart_key}")
-
-        # Build Excel in-memory
-        output = BytesIO()
-        with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-            if chart_key == "top_customers":
-                df.to_excel(writer, index=False, sheet_name="Customer Leaderboard")
+                    except Exception as e:
+                        skipped_count += 1
+                        errors.append(f"Error updating Variant ID {variant_id}: {str(e)}")
                 
-                # Get workbook and worksheet
-                workbook = writer.book
-                worksheet = writer.sheets["Customer Leaderboard"]
-                
-                # Add currency format
-                currency_format = workbook.add_format({'num_format': '$#,##0.00'})
-                
-                # Apply formatting to currency columns
-                worksheet.set_column('D:D', 15, currency_format)  # Total Revenue
-                worksheet.set_column('E:E', 15, currency_format)  # Total Profit
-                worksheet.set_column('F:F', 15, currency_format)  # Avg Order Value
-                
-                # Auto-fit other columns
-                worksheet.set_column('A:A', 25)  # Customer Name
-                worksheet.set_column('B:B', 30)  # Email
-                worksheet.set_column('C:C', 12)  # Total Orders
-                worksheet.set_column('G:G', 20)  # Last Order Date
-                worksheet.set_column('H:H', 20)  # Profit Data Coverage
-            else:
-                df.to_excel(writer, index=False, sheet_name="data")
-                
-        output.seek(0)
-
-        filename = f"{chart_key}_{datetime.utcnow().strftime('%Y%m%d')}.xlsx"
-        headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
-        return StreamingResponse(
-            output,
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers=headers
-        )
-
+                # Commit the transaction
+                await conn.commit()
+        
+        return {
+            "success": True,
+            "updated_count": updated_count,
+            "skipped_count": skipped_count,
+            "total_rows": len(df),
+            "errors": errors[:10] if errors else None,  # Return first 10 errors
+            "message": f"Successfully updated {updated_count} products"
+        }
+    
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
+
+
+@router.get("/cogs/profit-analysis")
+async def profit_analysis(shop_domain: str):
+    """
+    Calculate profit metrics based on orders and COGS data.
+    Returns revenue, COGS, profit, and margin for the **entire order history**.
+    Filters out line items with NULL variant_id to ensure accurate COGS matching.
+    """
+    try:
+        # UPDATED: removed date filter so this uses all orders for the shop
+        sql = """
+        WITH order_items AS (
+            SELECT 
+                li.order_id,
+                li.product_id,
+                li.variant_id,
+                li.quantity,
+                li.price,
+                (li.quantity * li.price) as line_revenue,
+                pv.cost as unit_cogs,
+                (li.quantity * COALESCE(pv.cost, 0)) as line_cogs
+            FROM shopify.order_line_items li
+            JOIN shopify.orders o ON li.order_id = o.order_id
+            LEFT JOIN shopify.product_variants pv ON li.variant_id = pv.variant_id
+            WHERE o.shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
+              AND LOWER(COALESCE(o.financial_status,'')) IN ('paid', 'partially_paid')
+              AND li.variant_id IS NOT NULL
+        )
+        SELECT 
+            COALESCE(SUM(line_revenue), 0)::numeric as total_revenue,
+            COALESCE(SUM(line_cogs), 0)::numeric as total_cogs,
+            COALESCE(SUM(line_revenue) - SUM(line_cogs), 0)::numeric as gross_profit,
+            CASE 
+                WHEN SUM(line_revenue) > 0 
+                THEN ROUND((SUM(line_revenue) - SUM(line_cogs)) / SUM(line_revenue) * 100, 2)
+                ELSE 0 
+            END as profit_margin_pct,
+            COUNT(DISTINCT order_id)::int as order_count,
+            COUNT(DISTINCT CASE WHEN unit_cogs IS NULL THEN variant_id END)::int as items_without_cogs
+        FROM order_items;
+        """
+        
+        async with get_conn() as conn:
+            async with conn.cursor() as cur:
+                # UPDATED: only one parameter now (shop_domain)
+                await cur.execute(sql, (shop_domain,))
+                row = await cur.fetchone()
+                
+                if not row:
+                    raise HTTPException(404, "No data found")
+                
+                total_revenue, total_cogs, gross_profit, profit_margin_pct, order_count, items_without_cogs = row
+                
+                return {
+                    "period_days": None,  # all-time
+                    "total_revenue": float(total_revenue),
+                    "total_cogs": float(total_cogs),
+                    "gross_profit": float(gross_profit),
+                    "profit_margin_percentage": float(profit_margin_pct),
+                    "order_count": order_count,
+                    "items_without_cogs": items_without_cogs,
+                    "has_complete_data": items_without_cogs == 0
+                }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error calculating profit: {str(e)}")
+
+
+@router.get("/cogs/profit-by-product")
+async def profit_by_product(shop_domain: str, limit: int = 10):
+    """
+    Get top products by profit with COGS breakdown over the **entire order history**.
+    Filters out line items with NULL variant_id to ensure accurate COGS matching.
+    """
+    try:
+        # UPDATED: removed date filter so this uses all orders for the shop
+        sql = """
+        SELECT 
+            p.title as product_name,
+            SUM(li.quantity)::int as units_sold,
+            COALESCE(SUM(li.quantity * li.price), 0)::numeric as revenue,
+            COALESCE(SUM(li.quantity * pv.cost), 0)::numeric as cogs,
+            COALESCE(SUM(li.quantity * li.price) - SUM(li.quantity * pv.cost), 0)::numeric as profit,
+            CASE 
+                WHEN SUM(li.quantity * li.price) > 0 
+                THEN ROUND((SUM(li.quantity * li.price) - SUM(li.quantity * pv.cost)) / SUM(li.quantity * li.price) * 100, 2)
+                ELSE 0 
+            END as margin_pct
+        FROM shopify.order_line_items li
+        JOIN shopify.orders o ON li.order_id = o.order_id
+        JOIN shopify.products p ON li.product_id = p.product_id
+        LEFT JOIN shopify.product_variants pv ON li.variant_id = pv.variant_id
+        WHERE o.shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
+          AND LOWER(COALESCE(o.financial_status,'')) IN ('paid', 'partially_paid')
+          AND li.variant_id IS NOT NULL
+        GROUP BY p.product_id, p.title
+        ORDER BY profit DESC
+        LIMIT %s;
+        """
+        
+        async with get_conn() as conn:
+            async with conn.cursor() as cur:
+                # UPDATED: parameters are (shop_domain, limit)
+                await cur.execute(sql, (shop_domain, limit))
+                rows = await cur.fetchall()
+                
+                products = []
+                for row in rows:
+                    product_name, units_sold, revenue, cogs, profit, margin_pct = row
+                    products.append({
+                        "product_name": product_name,
+                        "units_sold": units_sold,
+                        "revenue": float(revenue),
+                        "cogs": float(cogs),
+                        "profit": float(profit),
+                        "margin_percentage": float(margin_pct)
+                    })
+                
+                return {
+                    "products": products,
+                    "period_days": None  # all-time
+                }
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching product profit: {str(e)}")
