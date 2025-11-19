@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from commerce_app.core.db import get_conn
 from commerce_app.auth.session_tokens import verify_shopify_session_token
 from datetime import datetime, timedelta
@@ -8,31 +8,54 @@ import statistics
 router = APIRouter()
 
 
-def get_shop_from_token(payload: Dict[str, Any] = Depends(verify_shopify_session_token)) -> str:
+async def get_shop_from_token(request: Request) -> str:
     """
-    Extract shop domain from validated session token payload.
+    Extract shop domain from the Authorization header.
     
-    The 'dest' claim contains the shop URL like: https://store.myshopify.com
+    Note: Session token is already validated by router-level dependency.
+    This function just extracts the shop domain from the token.
     """
-    dest = payload.get("dest", "")
-    if not dest:
-        raise HTTPException(401, "Missing shop in token")
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(401, "Missing authorization header")
     
-    # Remove https:// prefix
-    shop_domain = dest.replace("https://", "").replace("http://", "")
+    token = auth_header.replace("Bearer ", "")
     
-    # Validate format
-    if not shop_domain.endswith(".myshopify.com"):
-        raise HTTPException(401, "Invalid shop domain in token")
+    # Manually decode the token to extract shop (already validated by router)
+    import jwt
+    import os
     
-    return shop_domain
+    try:
+        # Decode without verification since router already validated it
+        payload = jwt.decode(
+            token, 
+            os.getenv("SHOPIFY_API_SECRET"), 
+            algorithms=["HS256"],
+            options={"verify_signature": False}  # Skip verification - already done
+        )
+        
+        dest = payload.get("dest", "")
+        if not dest:
+            raise HTTPException(401, "Missing shop in token")
+        
+        # Remove https:// prefix
+        shop_domain = dest.replace("https://", "").replace("http://", "")
+        
+        # Validate format
+        if not shop_domain.endswith(".myshopify.com"):
+            raise HTTPException(401, "Invalid shop domain in token")
+        
+        return shop_domain
+        
+    except Exception as e:
+        raise HTTPException(401, f"Invalid token: {str(e)}")
 
 
 @router.get("/forecasts/revenue")
 async def forecast_revenue(
-    shop_domain: str = Depends(get_shop_from_token),
     days: int = 30,
-    lookback_days: int = 90
+    lookback_days: int = 90,
+    shop_domain: str = Depends(get_shop_from_token)
 ):
     """
     Revenue forecast using moving average and trend analysis.
@@ -115,9 +138,9 @@ async def forecast_revenue(
 
 @router.get("/forecasts/orders")
 async def forecast_orders(
-    shop_domain: str = Depends(get_shop_from_token),
     days: int = 30,
-    lookback_days: int = 90
+    lookback_days: int = 90,
+    shop_domain: str = Depends(get_shop_from_token)
 ):
     """
     Order volume forecast using historical patterns.
@@ -203,8 +226,8 @@ async def forecast_orders(
 
 @router.get("/forecasts/inventory-depletion")
 async def forecast_inventory_depletion(
-    shop_domain: str = Depends(get_shop_from_token),
-    product_id: int = None
+    product_id: int = None,
+    shop_domain: str = Depends(get_shop_from_token)
 ):
     """
     Forecast when inventory will run out based on sales velocity.
@@ -329,8 +352,8 @@ async def forecast_inventory_depletion(
 
 @router.get("/forecasts/customer-lifetime-value")
 async def forecast_customer_lifetime_value(
-    shop_domain: str = Depends(get_shop_from_token),
-    segment: str = None
+    segment: str = None,
+    shop_domain: str = Depends(get_shop_from_token)
 ):
     """
     Calculate Customer Lifetime Value (CLV) predictions.
