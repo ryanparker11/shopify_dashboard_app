@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import Plot from 'react-plotly.js';
 import type { Data, Layout } from 'plotly.js';
 import { Card, Layout as PolarisLayout, Page, Text, BlockStack, InlineGrid, Select, Badge, DataTable, Banner } from '@shopify/polaris';
