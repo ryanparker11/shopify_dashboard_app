@@ -77,16 +77,6 @@ async def register_webhooks(shop: str, access_token: str):
         {"topic": "products/update", "address": f"{APP_URL}/webhooks/ingest"},
         {"topic": "customers/create", "address": f"{APP_URL}/webhooks/ingest"},
         {"topic": "customers/update", "address": f"{APP_URL}/webhooks/ingest"},
-        # GDPR webhooks (MANDATORY)
-        {
-            "topic": "customers/data_request",
-            "address": f"{APP_URL}/webhooks/customers/data_request",
-        },
-        {
-            "topic": "customers/redact",
-            "address": f"{APP_URL}/webhooks/customers/redact",
-        },
-        {"topic": "shop/redact", "address": f"{APP_URL}/webhooks/shop/redact"},
     ]
 
     async with httpx.AsyncClient(timeout=20.0) as client:
@@ -1269,38 +1259,6 @@ async def sync_customers(shop: str, shop_id: int, access_token: str):
         )
 
 
-@router.post("/sync-customers/{shop_domain}")
-async def trigger_customer_sync(
-    shop_domain: str, background_tasks: BackgroundTasks
-):
-    """
-    Manually trigger a customer sync for a shop.
-    Useful for backfilling missing customers or re-syncing.
-    """
-    conn = db()
-    with conn, conn.cursor() as cur:
-        cur.execute(
-            "SELECT shop_id, access_token FROM shopify.shops WHERE shop_domain = %s",
-            (shop_domain,),
-        )
-        row = cur.fetchone()
-
-        if not row:
-            raise HTTPException(404, "Shop not found")
-
-        shop_id = row["shop_id"]
-        access_token = row["access_token"]
-
-    # Run sync in background
-    background_tasks.add_task(
-        sync_customers, shop_domain, shop_id, access_token
-    )
-
-    return {
-        "status": "started",
-        "message": f"Customer sync started for {shop_domain}",
-    }
-
 # ============================================================================
 # NEW FUNCTION: Order Line Items Sync
 # ============================================================================
@@ -1625,6 +1583,48 @@ async def sync_order_line_items(shop: str, shop_id: int, access_token: str):
 
 
 # ============================================================================
+# SEQUENTIAL SYNC FUNCTION - Runs syncs in order to avoid foreign key violations
+# ============================================================================
+async def run_sequential_sync(shop: str, shop_id: int, access_token: str):
+    """
+    Run all sync operations SEQUENTIALLY to avoid foreign key violations.
+    
+    Order matters:
+    1. Customers first (no dependencies)
+    2. Products (no dependencies)
+    3. Orders (depends on customers existing)
+    4. Line items (depends on orders existing)
+    """
+    try:
+        # 1. Customers FIRST - orders have foreign keys to customers
+        print(f"🔄 [1/4] Starting customer sync for {shop}")
+        await sync_customers(shop, shop_id, access_token)
+        print(f"✅ [1/4] Customer sync complete for {shop}")
+        
+        # 2. Products - independent of customers
+        print(f"🔄 [2/4] Starting product sync for {shop}")
+        await sync_products(shop, shop_id, access_token)
+        print(f"✅ [2/4] Product sync complete for {shop}")
+        
+        # 3. Orders - NOW customers exist, can reference them safely
+        print(f"🔄 [3/4] Starting order sync for {shop}")
+        await initial_data_sync(shop, shop_id, access_token)
+        print(f"✅ [3/4] Order sync complete for {shop}")
+        
+        # 4. Line items - depends on orders existing
+        print(f"🔄 [4/4] Starting line items sync for {shop}")
+        await sync_order_line_items(shop, shop_id, access_token)
+        print(f"✅ [4/4] Line items sync complete for {shop}")
+        
+        print(f"🎉 All syncs completed successfully for {shop}")
+        
+    except Exception as e:
+        print(f"❌ Error during sequential sync for {shop}: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+# ============================================================================
 # Helper function
 # ============================================================================
 async def mark_sync_failed(shop_id: int, error_message: str):
@@ -1853,24 +1853,14 @@ async def auth_callback(request: Request, background_tasks: BackgroundTasks):
             if not shop_id:
                 raise HTTPException(status_code=500, detail="Failed to save shop")
 
-    # Register webhooks and queue initial sync
+    # Register webhooks and queue SEQUENTIAL sync
     try:
         await register_webhooks(shop, access_token)
         print(f"✅ Webhooks registered for {shop}")
 
-        # CRITICAL: Sync customers FIRST (orders have foreign keys to customers)
-        # Run all sync tasks in background in the correct order:
-        # 1. Customers (no dependencies)
-        # 2. Products (no dependencies)  
-        # 3. Orders (depends on customers existing)
-        # 4. Line items (depends on orders existing)
-
-        # Run all sync tasks in background
-        background_tasks.add_task(sync_customers, shop, shop_id, access_token)
-        background_tasks.add_task(sync_products, shop, shop_id, access_token)
-        background_tasks.add_task(initial_data_sync, shop, shop_id, access_token)
-        background_tasks.add_task(sync_order_line_items, shop, shop_id, access_token)
-        print(f"📋 Bulk syncs queued for {shop}")
+        # Run SEQUENTIAL sync in background (all syncs will run in order)
+        background_tasks.add_task(run_sequential_sync, shop, shop_id, access_token)
+        print(f"📋 Sequential bulk sync queued for {shop} (customers→products→orders→line_items)")
 
     except Exception as e:
         print(f"❌ Failed setup for {shop}: {e}")
@@ -1917,6 +1907,39 @@ async def sync_status(shop_domain: str):
 # ============================================================================
 # SYNC ENDPOINTS: Manually trigger syncs
 # ============================================================================
+@router.post("/sync-customers/{shop_domain}")
+async def trigger_customer_sync(
+    shop_domain: str, background_tasks: BackgroundTasks
+):
+    """
+    Manually trigger a customer sync for a shop.
+    Useful for backfilling missing customers or re-syncing.
+    """
+    conn = db()
+    with conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT shop_id, access_token FROM shopify.shops WHERE shop_domain = %s",
+            (shop_domain,),
+        )
+        row = cur.fetchone()
+
+        if not row:
+            raise HTTPException(404, "Shop not found")
+
+        shop_id = row["shop_id"]
+        access_token = row["access_token"]
+
+    # Run sync in background
+    background_tasks.add_task(
+        sync_customers, shop_domain, shop_id, access_token
+    )
+
+    return {
+        "status": "started",
+        "message": f"Customer sync started for {shop_domain}",
+    }
+
+
 @router.post("/sync-products/{shop_domain}")
 async def trigger_product_sync(
     shop_domain: str, background_tasks: BackgroundTasks
