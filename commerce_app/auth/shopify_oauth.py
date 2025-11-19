@@ -1050,25 +1050,29 @@ async def sync_customers(shop: str, shop_id: int, access_token: str):
 
     from commerce_app.core.db import get_conn
 
-    # Fetch customers from Shopify REST API (limited to 250 at a time)
-    # This is less efficient but works without special permissions
+    # Fetch customers from Shopify REST API using cursor-based pagination
     async with httpx.AsyncClient(timeout=30.0) as client:
-        page = 1
         total_customers = 0
+        page_info = None
         
         async with get_conn() as conn:
             async with conn.cursor() as cur:
                 while True:
                     try:
+                        # Build URL with cursor if available
+                        params = {"limit": 250}
+                        if page_info:
+                            params["page_info"] = page_info
+                        
                         # Fetch a page of customers
                         response = await client.get(
                             f"https://{shop}/admin/api/2025-10/customers.json",
                             headers={"X-Shopify-Access-Token": access_token},
-                            params={"limit": 250, "page": page}
+                            params=params
                         )
                         
                         if response.status_code != 200:
-                            print(f"⚠️  Customer API returned {response.status_code}, stopping")
+                            print(f"⚠️  Customer API returned {response.status_code}: {response.text}")
                             break
                         
                         data = response.json()
@@ -1129,15 +1133,27 @@ async def sync_customers(shop: str, shop_id: int, access_token: str):
                         await conn.commit()
                         print(f"👥 Processed {total_customers} customers...")
                         
-                        # Check if there are more pages
-                        if len(customers) < 250:
+                        # Check Link header for next page
+                        link_header = response.headers.get("Link", "")
+                        if 'rel="next"' in link_header:
+                            # Extract page_info from Link header
+                            # Format: <https://shop.myshopify.com/admin/api/2025-10/customers.json?page_info=xxxxx>; rel="next"
+                            import re
+                            match = re.search(r'page_info=([^>&]+)', link_header)
+                            if match:
+                                page_info = match.group(1)
+                            else:
+                                break
+                        else:
+                            # No more pages
                             break
                         
-                        page += 1
                         await asyncio.sleep(0.5)  # Rate limit protection
                         
                     except Exception as e:
-                        print(f"Error fetching customers page {page}: {e}")
+                        print(f"Error fetching customers: {e}")
+                        import traceback
+                        traceback.print_exc()
                         break
 
     print(f"✅ Customer extraction complete: {total_customers} customers imported")
