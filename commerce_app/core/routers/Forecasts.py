@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends, Request
+from fastapi import APIRouter, HTTPException, Depends
 from commerce_app.core.db import get_conn
 from commerce_app.auth.session_tokens import verify_shopify_session_token
 from datetime import datetime, timedelta
@@ -61,7 +61,16 @@ async def forecast_revenue(
             rows = await cur.fetchall()
             
             if not rows:
-                raise HTTPException(404, "No historical data available")
+                # Return empty forecast instead of error
+                return {
+                    "historical": [],
+                    "forecast": [],
+                    "metrics": {
+                        "avg_daily_revenue": 0,
+                        "daily_trend": 0,
+                        "forecast_total": 0
+                    }
+                }
             
             # Extract historical revenue
             historical_data = [{"date": d, "revenue": float(r)} for d, r in rows]
@@ -70,7 +79,17 @@ async def forecast_revenue(
             # Calculate trend using simple linear regression
             n = len(revenues)
             if n < 7:
-                raise HTTPException(400, "Need at least 7 days of historical data")
+                # Return what we have without forecast
+                avg_revenue = sum(revenues) / n if n > 0 else 0
+                return {
+                    "historical": historical_data,
+                    "forecast": [],
+                    "metrics": {
+                        "avg_daily_revenue": round(avg_revenue, 2),
+                        "daily_trend": 0,
+                        "forecast_total": 0
+                    }
+                }
             
             # Calculate moving average and trend
             window = min(14, n // 2)  # 14-day moving average or half the data
@@ -147,7 +166,17 @@ async def forecast_orders(
             rows = await cur.fetchall()
             
             if not rows:
-                raise HTTPException(404, "No historical order data available")
+                # Return empty forecast
+                return {
+                    "historical": [],
+                    "forecast": [],
+                    "metrics": {
+                        "avg_daily_orders": 0,
+                        "daily_trend": 0,
+                        "std_deviation": 0,
+                        "forecast_total": 0
+                    }
+                }
             
             historical_data = [{"date": str(d), "orders": c} for d, c in rows]
             order_counts = [c for _, c in rows]
@@ -155,7 +184,18 @@ async def forecast_orders(
             # Calculate statistics
             n = len(order_counts)
             if n < 7:
-                raise HTTPException(400, "Need at least 7 days of historical data")
+                # Return what we have
+                avg_orders = sum(order_counts) / n if n > 0 else 0
+                return {
+                    "historical": historical_data,
+                    "forecast": [],
+                    "metrics": {
+                        "avg_daily_orders": round(avg_orders, 2),
+                        "daily_trend": 0,
+                        "std_deviation": 0,
+                        "forecast_total": 0
+                    }
+                }
             
             window = min(14, n // 2)
             moving_avg = statistics.mean(order_counts[-window:])
@@ -343,127 +383,152 @@ async def forecast_customer_lifetime_value(
         shop_domain: Shop domain (from session token)
         segment: Optional customer segment filter ('new', 'returning', 'vip')
     """
-    sql = """
-    WITH customer_metrics AS (
+    try:
+        sql = """
+        WITH customer_metrics AS (
+            SELECT 
+                c.customer_id,
+                c.email,
+                c.first_name,
+                c.last_name,
+                COUNT(DISTINCT o.order_id)::int as total_orders,
+                COALESCE(SUM(o.total_price), 0)::numeric as total_spent,
+                COALESCE(AVG(o.total_price), 0)::numeric as avg_order_value,
+                MIN(o.created_at) as first_order_date,
+                MAX(o.created_at) as last_order_date,
+                EXTRACT(days FROM MAX(o.created_at) - MIN(o.created_at))::int as customer_lifespan_days,
+                c.orders_count as shopify_order_count,
+                c.total_spent as shopify_total_spent
+            FROM shopify.customers c
+            LEFT JOIN shopify.orders o 
+                ON o.shop_id = c.shop_id 
+                AND o.customer_id = c.customer_id
+                AND o.financial_status IN ('paid', 'authorized', 'partially_paid')
+            WHERE c.shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
+            GROUP BY c.customer_id, c.email, c.first_name, c.last_name, c.orders_count, c.total_spent
+            HAVING COUNT(DISTINCT o.order_id) > 0
+        ),
+        customer_segments AS (
+            SELECT 
+                *,
+                CASE 
+                    WHEN total_orders = 1 THEN 'new'
+                    WHEN total_spent > 1000 THEN 'vip'
+                    ELSE 'returning'
+                END as segment,
+                CASE 
+                    WHEN customer_lifespan_days > 0 
+                    THEN total_orders::float / (customer_lifespan_days::float / 30.0)
+                    ELSE 0 
+                END as monthly_order_frequency
+            FROM customer_metrics
+        )
         SELECT 
-            c.customer_id,
-            c.email,
-            c.first_name,
-            c.last_name,
-            COUNT(DISTINCT o.order_id)::int as total_orders,
-            COALESCE(SUM(o.total_price), 0)::numeric as total_spent,
-            COALESCE(AVG(o.total_price), 0)::numeric as avg_order_value,
-            MIN(o.created_at) as first_order_date,
-            MAX(o.created_at) as last_order_date,
-            EXTRACT(days FROM MAX(o.created_at) - MIN(o.created_at))::int as customer_lifespan_days,
-            c.orders_count as shopify_order_count,
-            c.total_spent as shopify_total_spent
-        FROM shopify.customers c
-        LEFT JOIN shopify.orders o 
-            ON o.shop_id = c.shop_id 
-            AND o.customer_id = c.customer_id
-            AND o.financial_status IN ('paid', 'authorized', 'partially_paid')
-        WHERE c.shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
-        GROUP BY c.customer_id, c.email, c.first_name, c.last_name, c.orders_count, c.total_spent
-        HAVING COUNT(DISTINCT o.order_id) > 0
-    ),
-    customer_segments AS (
-        SELECT 
-            *,
-            CASE 
-                WHEN total_orders = 1 THEN 'new'
-                WHEN total_spent > 1000 THEN 'vip'
-                ELSE 'returning'
-            END as segment,
-            CASE 
-                WHEN customer_lifespan_days > 0 
-                THEN total_orders::float / (customer_lifespan_days::float / 30.0)
-                ELSE 0 
-            END as monthly_order_frequency
-        FROM customer_metrics
-    )
-    SELECT 
-        customer_id,
-        email,
-        first_name,
-        last_name,
-        segment,
-        total_orders,
-        total_spent,
-        avg_order_value,
-        first_order_date,
-        last_order_date,
-        customer_lifespan_days,
-        monthly_order_frequency
-    FROM customer_segments
-    WHERE (%s::text IS NULL OR segment = %s::text)
-    ORDER BY total_spent DESC
-    LIMIT 1000;
-    """
-    
-    async with get_conn() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(sql, (shop_domain, segment, segment))
-            rows = await cur.fetchall()
-            
-            if not rows:
-                return {"message": "No customer data available", "customers": []}
-            
-            customers = []
-            for row in rows:
-                (cust_id, email, first_name, last_name, seg, total_orders, 
-                 total_spent, aov, first_order, last_order, lifespan_days, monthly_freq) = row
+            customer_id,
+            email,
+            first_name,
+            last_name,
+            segment,
+            total_orders,
+            total_spent,
+            avg_order_value,
+            first_order_date,
+            last_order_date,
+            customer_lifespan_days,
+            monthly_order_frequency
+        FROM customer_segments
+        WHERE (%s::text IS NULL OR segment = %s::text)
+        ORDER BY total_spent DESC
+        LIMIT 1000;
+        """
+        
+        async with get_conn() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(sql, (shop_domain, segment, segment))
+                rows = await cur.fetchall()
                 
-                # Calculate CLV using simple formula: AOV × Purchase Frequency × Customer Lifespan
-                # Predicted lifespan: assume average customer stays active for 24 months
-                predicted_lifespan_months = 24
-                
-                # Monthly frequency based on historical behavior
-                monthly_frequency = monthly_freq if monthly_freq > 0 else 1
-                
-                # Predicted CLV
-                predicted_clv = float(aov) * monthly_frequency * predicted_lifespan_months
-                
-                # Calculate churn risk based on days since last order
-                days_since_last_order = (datetime.now() - last_order).days if last_order else 999
-                churn_risk = "high" if days_since_last_order > 90 else \
-                            "medium" if days_since_last_order > 60 else "low"
-                
-                customers.append({
-                    "customer_id": cust_id,
-                    "email": email,
-                    "name": f"{first_name or ''} {last_name or ''}".strip() or "Unknown",
-                    "segment": seg,
-                    "total_orders": total_orders,
-                    "total_spent": float(total_spent),
-                    "avg_order_value": float(aov),
-                    "first_order_date": first_order.strftime("%Y-%m-%d") if first_order else None,
-                    "last_order_date": last_order.strftime("%Y-%m-%d") if last_order else None,
-                    "customer_lifespan_days": lifespan_days,
-                    "monthly_order_frequency": round(monthly_frequency, 2),
-                    "predicted_clv": round(predicted_clv, 2),
-                    "churn_risk": churn_risk,
-                    "days_since_last_order": days_since_last_order
-                })
-            
-            # Calculate segment summaries
-            segment_summary = {}
-            for seg_type in ['new', 'returning', 'vip']:
-                seg_customers = [c for c in customers if c['segment'] == seg_type]
-                if seg_customers:
-                    segment_summary[seg_type] = {
-                        "count": len(seg_customers),
-                        "avg_clv": round(statistics.mean([c['predicted_clv'] for c in seg_customers]), 2),
-                        "total_value": round(sum([c['total_spent'] for c in seg_customers]), 2)
+                if not rows:
+                    return {
+                        "customers": [],
+                        "summary": {
+                            "total_customers": 0,
+                            "avg_customer_lifetime_value": 0,
+                            "total_predicted_value": 0,
+                            "high_churn_risk": 0,
+                            "segment_breakdown": {}
+                        }
                     }
-            
-            return {
-                "customers": customers[:100],  # Return top 100
-                "summary": {
-                    "total_customers": len(customers),
-                    "avg_customer_lifetime_value": round(statistics.mean([c['predicted_clv'] for c in customers]), 2),
-                    "total_predicted_value": round(sum([c['predicted_clv'] for c in customers]), 2),
-                    "high_churn_risk": len([c for c in customers if c['churn_risk'] == 'high']),
-                    "segment_breakdown": segment_summary
+                
+                customers = []
+                for row in rows:
+                    (cust_id, email, first_name, last_name, seg, total_orders, 
+                     total_spent, aov, first_order, last_order, lifespan_days, monthly_freq) = row
+                    
+                    # Calculate CLV using simple formula: AOV × Purchase Frequency × Customer Lifespan
+                    # Predicted lifespan: assume average customer stays active for 24 months
+                    predicted_lifespan_months = 24
+                    
+                    # Monthly frequency based on historical behavior
+                    monthly_frequency = monthly_freq if monthly_freq and monthly_freq > 0 else 1
+                    
+                    # Predicted CLV
+                    predicted_clv = float(aov) * monthly_frequency * predicted_lifespan_months
+                    
+                    # Calculate churn risk based on days since last order
+                    days_since_last_order = (datetime.now() - last_order).days if last_order else 999
+                    churn_risk = "high" if days_since_last_order > 90 else \
+                                "medium" if days_since_last_order > 60 else "low"
+                    
+                    customers.append({
+                        "customer_id": cust_id,
+                        "email": email or "unknown",
+                        "name": f"{first_name or ''} {last_name or ''}".strip() or "Unknown",
+                        "segment": seg,
+                        "total_orders": total_orders,
+                        "total_spent": float(total_spent),
+                        "avg_order_value": float(aov),
+                        "first_order_date": first_order.strftime("%Y-%m-%d") if first_order else None,
+                        "last_order_date": last_order.strftime("%Y-%m-%d") if last_order else None,
+                        "customer_lifespan_days": lifespan_days or 0,
+                        "monthly_order_frequency": round(monthly_frequency, 2),
+                        "predicted_clv": round(predicted_clv, 2),
+                        "churn_risk": churn_risk,
+                        "days_since_last_order": days_since_last_order
+                    })
+                
+                # Calculate segment summaries
+                segment_summary = {}
+                for seg_type in ['new', 'returning', 'vip']:
+                    seg_customers = [c for c in customers if c['segment'] == seg_type]
+                    if seg_customers:
+                        segment_summary[seg_type] = {
+                            "count": len(seg_customers),
+                            "avg_clv": round(statistics.mean([c['predicted_clv'] for c in seg_customers]), 2),
+                            "total_value": round(sum([c['total_spent'] for c in seg_customers]), 2)
+                        }
+                
+                return {
+                    "customers": customers[:100],  # Return top 100
+                    "summary": {
+                        "total_customers": len(customers),
+                        "avg_customer_lifetime_value": round(statistics.mean([c['predicted_clv'] for c in customers]), 2) if customers else 0,
+                        "total_predicted_value": round(sum([c['predicted_clv'] for c in customers]), 2) if customers else 0,
+                        "high_churn_risk": len([c for c in customers if c['churn_risk'] == 'high']),
+                        "segment_breakdown": segment_summary
+                    }
                 }
+    except Exception as e:
+        # Log the error and return empty data instead of 500
+        print(f"Error in forecast_customer_lifetime_value: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return {
+            "customers": [],
+            "summary": {
+                "total_customers": 0,
+                "avg_customer_lifetime_value": 0,
+                "total_predicted_value": 0,
+                "high_churn_risk": 0,
+                "segment_breakdown": {}
             }
+        }
