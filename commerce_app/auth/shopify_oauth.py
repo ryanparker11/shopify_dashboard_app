@@ -1858,13 +1858,18 @@ async def auth_callback(request: Request, background_tasks: BackgroundTasks):
         await register_webhooks(shop, access_token)
         print(f"✅ Webhooks registered for {shop}")
 
+        # CRITICAL: Sync customers FIRST (orders have foreign keys to customers)
+        # Run all sync tasks in background in the correct order:
+        # 1. Customers (no dependencies)
+        # 2. Products (no dependencies)  
+        # 3. Orders (depends on customers existing)
+        # 4. Line items (depends on orders existing)
+
         # Run all sync tasks in background
-        background_tasks.add_task(initial_data_sync, shop, shop_id, access_token)
-        background_tasks.add_task(sync_products, shop, shop_id, access_token)
         background_tasks.add_task(sync_customers, shop, shop_id, access_token)
-        background_tasks.add_task(
-            sync_order_line_items, shop, shop_id, access_token
-        )
+        background_tasks.add_task(sync_products, shop, shop_id, access_token)
+        background_tasks.add_task(initial_data_sync, shop, shop_id, access_token)
+        background_tasks.add_task(sync_order_line_items, shop, shop_id, access_token)
         print(f"📋 Bulk syncs queued for {shop}")
 
     except Exception as e:
