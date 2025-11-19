@@ -1038,12 +1038,10 @@ async def sync_customers(shop: str, shop_id: int, access_token: str):
             }
             createdAt
             updatedAt
-            ordersCount
-            totalSpentSet {
-              shopMoney {
-                amount
-                currencyCode
-              }
+            numberOfOrders
+            amountSpent {
+              amount
+              currencyCode
             }
             state
           }
@@ -1195,6 +1193,13 @@ async def sync_customers(shop: str, shop_id: int, access_token: str):
                         # Parse email marketing consent
                         marketing_consent = customer.get("emailMarketingConsent", {})
                         accepts_marketing = marketing_consent.get("marketingState") == "SUBSCRIBED"
+                        
+                        # Parse amount spent
+                        amount_spent_data = customer.get("amountSpent", {})
+                        total_spent = float(amount_spent_data.get("amount", 0))
+                        
+                        # Get orders count
+                        orders_count = int(customer.get("numberOfOrders", 0))
 
                         # Insert/update customer
                         await cur.execute(
@@ -1229,10 +1234,8 @@ async def sync_customers(shop: str, shop_id: int, access_token: str):
                                 customer.get("createdAt"),
                                 customer.get("updatedAt"),
                                 customer.get("phone"),
-                                float(customer.get("totalSpentSet", {})
-                                    .get("shopMoney", {})
-                                    .get("amount", 0)),
-                                int(customer.get("ordersCount", 0)),
+                                total_spent,
+                                orders_count,
                                 customer.get("state"),
                                 json.dumps(customer),  # Store full JSON for reference
                             ),
