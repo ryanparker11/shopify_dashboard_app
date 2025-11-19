@@ -11,6 +11,7 @@ import {
   InlineStack,
   DataTable,
   Badge,
+  Tabs,
 } from '@shopify/polaris';
 import enTranslations from '@shopify/polaris/locales/en.json';
 import '@shopify/polaris/build/esm/styles.css';
@@ -18,7 +19,8 @@ import '@shopify/polaris/build/esm/styles.css';
 import './lib/api';
 
 import { COGSManagement } from './components/COGSManagement';
-import { useEffect, useRef, useState } from 'react';
+import { ForecastsPage } from './components/ForecastsPage';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import type { ReactNode} from 'react';
 import Plot from 'react-plotly.js';
 import { authenticatedFetch, authenticatedBlobFetch } from './lib/api';
@@ -167,7 +169,7 @@ function AuthGate({ children }: { children: ReactNode }) {
 }
 
 // --------------------------------------------------------------------
-// Main AppContent – unchanged logic, just wrapped in AuthGate below
+// Main AppContent – with tab navigation
 // --------------------------------------------------------------------
 function AppContent() {
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
@@ -183,6 +185,9 @@ function AppContent() {
   const [customerData, setCustomerData] = useState<CustomerLeaderboardResponse | null>(null);
   const [sortedColumn, setSortedColumn] = useState<number | null>(null);
   const [sortDirection, setSortDirection] = useState<SortDirection>('descending');
+
+  // Tab navigation state
+  const [selectedTab, setSelectedTab] = useState(0);
 
   const API_URL =
     import.meta.env.VITE_API_URL || 'https://api.lodestaranalytics.io';
@@ -494,6 +499,15 @@ const downloadChart = async (chart: ChartData) => {
   }, [shop]);
 
   // --------------------------------------------------------------------
+  // Tab change handler
+  // --------------------------------------------------------------------
+  
+  const handleTabChange = useCallback(
+    (selectedTabIndex: number) => setSelectedTab(selectedTabIndex),
+    []
+  );
+
+  // --------------------------------------------------------------------
   // Rendering helpers
   // --------------------------------------------------------------------
 
@@ -692,74 +706,72 @@ const downloadChart = async (chart: ChartData) => {
     };
 
     return (
-      <div style={{ marginTop: '20px' }}>
-        <Card>
-          <BlockStack gap="400">
-            <InlineStack align="space-between" blockAlign="center">
-              <div>
-                <Text as="h2" variant="headingLg">
-                  Customer Leaderboard
-                </Text>
+      <Card>
+        <BlockStack gap="400">
+          <InlineStack align="space-between" blockAlign="center">
+            <div>
+              <Text as="h2" variant="headingLg">
+                Customer Leaderboard
+              </Text>
+              <Text as="p" variant="bodySm" tone="subdued">
+                Top {summary.total_customers} customers by revenue
+              </Text>
+            </div>
+            <Button onClick={downloadCustomerLeaderboard}>
+              Download Excel
+            </Button>
+          </InlineStack>
+
+          {/* Summary Cards */}
+          <InlineStack gap="400" wrap={false}>
+            <Card>
+              <BlockStack gap="200">
                 <Text as="p" variant="bodySm" tone="subdued">
-                  Top {summary.total_customers} customers by revenue
+                  Total Revenue
                 </Text>
-              </div>
-              <Button onClick={downloadCustomerLeaderboard}>
-                Download Excel
-              </Button>
-            </InlineStack>
+                <Text as="p" variant="headingMd">
+                  ${summary.total_revenue.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                </Text>
+              </BlockStack>
+            </Card>
 
-            {/* Summary Cards */}
-            <InlineStack gap="400" wrap={false}>
+            {summary.profit_data_available && (
               <Card>
                 <BlockStack gap="200">
                   <Text as="p" variant="bodySm" tone="subdued">
-                    Total Revenue
+                    Total Profit
                   </Text>
                   <Text as="p" variant="headingMd">
-                    ${summary.total_revenue.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                    ${(summary.total_profit ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
                   </Text>
                 </BlockStack>
               </Card>
+            )}
 
-              {summary.profit_data_available && (
-                <Card>
-                  <BlockStack gap="200">
-                    <Text as="p" variant="bodySm" tone="subdued">
-                      Total Profit
-                    </Text>
-                    <Text as="p" variant="headingMd">
-                      ${(summary.total_profit ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                    </Text>
-                  </BlockStack>
-                </Card>
-              )}
+            <Card>
+              <BlockStack gap="200">
+                <Text as="p" variant="bodySm" tone="subdued">
+                  Avg Revenue/Customer
+                </Text>
+                <Text as="p" variant="headingMd">
+                  ${summary.avg_revenue_per_customer.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                </Text>
+              </BlockStack>
+            </Card>
+          </InlineStack>
 
-              <Card>
-                <BlockStack gap="200">
-                  <Text as="p" variant="bodySm" tone="subdued">
-                    Avg Revenue/Customer
-                  </Text>
-                  <Text as="p" variant="headingMd">
-                    ${summary.avg_revenue_per_customer.toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                  </Text>
-                </BlockStack>
-              </Card>
-            </InlineStack>
-
-            {/* Data Table */}
-            <DataTable
-              columnContentTypes={['text', 'numeric', 'numeric', 'numeric', 'numeric', 'text']}
-              headings={headings}
-              rows={rows}
-              sortable={[true, true, true, true, true, true]}
-              defaultSortDirection="descending"
-              initialSortColumnIndex={2} // Sort by revenue by default
-              onSort={handleSort}
-            />
-          </BlockStack>
-        </Card>
-      </div>
+          {/* Data Table */}
+          <DataTable
+            columnContentTypes={['text', 'numeric', 'numeric', 'numeric', 'numeric', 'text']}
+            headings={headings}
+            rows={rows}
+            sortable={[true, true, true, true, true, true]}
+            defaultSortDirection="descending"
+            initialSortColumnIndex={2} // Sort by revenue by default
+            onSort={handleSort}
+          />
+        </BlockStack>
+      </Card>
     );
   };
 
@@ -768,60 +780,114 @@ const downloadChart = async (chart: ChartData) => {
       return null;
 
     return (
-      <div style={{ marginTop: '20px' }}>
-        <Layout>
-          {chartData.map((chart, index) => {
-            const titleText =
-              typeof chart.layout.title === 'string'
-                ? chart.layout.title
-                : chart.layout.title?.text || '';
+      <Layout>
+        {chartData.map((chart, index) => {
+          const titleText =
+            typeof chart.layout.title === 'string'
+              ? chart.layout.title
+              : chart.layout.title?.text || '';
 
-            return (
-              <Layout.Section key={chart.key || index} variant="oneHalf">
-                <Card>
-                  <BlockStack gap="300">
-                    <div style={{ padding: '16px 16px 0 16px' }}>
-                      <InlineStack align="space-between" blockAlign="center">
-                        <Text as="h2" variant="headingMd">
-                          {titleText}
-                        </Text>
+          return (
+            <Layout.Section key={chart.key || index} variant="oneHalf">
+              <Card>
+                <BlockStack gap="300">
+                  <div style={{ padding: '16px 16px 0 16px' }}>
+                    <InlineStack align="space-between" blockAlign="center">
+                      <Text as="h2" variant="headingMd">
+                        {titleText}
+                      </Text>
 
-                        {chart.export_url && (
-                          <Button
-                            size="slim"
-                            onClick={() => downloadChart(chart)}
-                          >
-                            Download
-                          </Button>
-                        )}
-                      </InlineStack>
-                    </div>
+                      {chart.export_url && (
+                        <Button
+                          size="slim"
+                          onClick={() => downloadChart(chart)}
+                        >
+                          Download
+                        </Button>
+                      )}
+                    </InlineStack>
+                  </div>
 
-                    <Plot
-                      data={chart.data}
-                      layout={{
-                        ...chart.layout,
-                        title: undefined,
-                        autosize: true,
-                        margin: { t: 20, r: 40, b: 60, l: 60 },
-                      }}
-                      config={{ responsive: true, displayModeBar: false }}
-                      style={{ width: '100%', height: '400px' }}
-                      useResizeHandler
-                    />
-                  </BlockStack>
-                </Card>
-              </Layout.Section>
-            );
-          })}
-        </Layout>
-      </div>
+                  <Plot
+                    data={chart.data}
+                    layout={{
+                      ...chart.layout,
+                      title: undefined,
+                      autosize: true,
+                      margin: { t: 20, r: 40, b: 60, l: 60 },
+                    }}
+                    config={{ responsive: true, displayModeBar: false }}
+                    style={{ width: '100%', height: '400px' }}
+                    useResizeHandler
+                  />
+                </BlockStack>
+              </Card>
+            </Layout.Section>
+          );
+        })}
+      </Layout>
     );
+  };
+
+  // --------------------------------------------------------------------
+  // Tab content rendering
+  // --------------------------------------------------------------------
+
+  const renderAnalyticsTab = () => {
+    return (
+      <BlockStack gap="400">
+        {totalOrders !== null && (
+          <Card>
+            <Text as="p" tone="subdued">
+              Your store has {totalOrders.toLocaleString()} orders ready to analyze.
+            </Text>
+          </Card>
+        )}
+        {renderCharts()}
+      </BlockStack>
+    );
+  };
+
+  const renderCOGSTab = () => {
+    if (!shop) return null;
+    return <COGSManagement shopDomain={shop} />;
+  };
+
+  const renderForecastsTab = () => {
+    if (!shop) return null;
+    return <ForecastsPage />;
+  };
+
+  const renderCustomersTab = () => {
+    return renderCustomerLeaderboard();
   };
 
   // --------------------------------------------------------------------
   // Main return
   // --------------------------------------------------------------------
+
+  const tabs = [
+    {
+      id: 'analytics',
+      content: 'Analytics',
+      panelID: 'analytics-panel',
+    },
+    {
+      id: 'cogs',
+      content: 'COGS & Profit',
+      panelID: 'cogs-panel',
+    },
+    {
+      id: 'forecasts',
+      content: 'Forecasts',
+      panelID: 'forecasts-panel',
+    },
+    {
+      id: 'customers',
+      content: 'Customers',
+      panelID: 'customers-panel',
+    },
+  ];
 
   return (
     <AppProvider i18n={enTranslations}>
@@ -833,30 +899,25 @@ const downloadChart = async (chart: ChartData) => {
             <BlockStack gap="400">
               <InlineStack align="space-between" blockAlign="center">
                 <Text as="h1" variant="headingLg">
-                  Welcome to Lodestar
+                  Lodestar Analytics
                 </Text>
               </InlineStack>
-
-              {totalOrders !== null && (
-                <Text as="p" tone="subdued">
-                  Your store has {totalOrders.toLocaleString()} orders ready to
-                  analyze.
-                </Text>
-              )}
             </BlockStack>
           </Card>
 
-          {/* COGS module */}
-          {shop && syncStatus?.status === 'completed' && (
+          {/* Only show tabs if sync is completed */}
+          {syncStatus?.status === 'completed' && (
             <div style={{ marginTop: '20px' }}>
-              <COGSManagement shopDomain={shop} />
+              <Tabs tabs={tabs} selected={selectedTab} onSelect={handleTabChange}>
+                <div style={{ marginTop: '20px' }}>
+                  {selectedTab === 0 && renderAnalyticsTab()}
+                  {selectedTab === 1 && renderCOGSTab()}
+                  {selectedTab === 2 && renderForecastsTab()}
+                  {selectedTab === 3 && renderCustomersTab()}
+                </div>
+              </Tabs>
             </div>
           )}
-
-          {/* Customer Leaderboard */}
-          {syncStatus?.status === 'completed' && renderCustomerLeaderboard()}
-
-          {renderCharts()}
         </div>
       </div>
     </AppProvider>
@@ -864,7 +925,7 @@ const downloadChart = async (chart: ChartData) => {
 }
 
 // --------------------------------------------------------------------
-// Root App – now wrapped in AuthGate
+// Root App – wrapped in AuthGate
 // --------------------------------------------------------------------
 export default function App() {
   return (
