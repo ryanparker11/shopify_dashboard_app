@@ -398,6 +398,31 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
                     (total_orders, shop_id),
                 )
                 await conn.commit()
+                
+                # Update customer total_spent based on actual orders
+                print(f"📊 Calculating customer total_spent from orders...")
+                await cur.execute(
+                    """
+                    UPDATE shopify.customers c
+                    SET total_spent = COALESCE(order_totals.total, 0)
+                    FROM (
+                        SELECT 
+                            customer_id,
+                            SUM(total_price) as total
+                        FROM shopify.orders
+                        WHERE shop_id = %s
+                          AND customer_id IS NOT NULL
+                          AND financial_status IN ('paid', 'authorized', 'partially_paid')
+                        GROUP BY customer_id
+                    ) AS order_totals
+                    WHERE c.shop_id = %s
+                      AND c.customer_id = order_totals.customer_id
+                    """,
+                    (shop_id, shop_id)
+                )
+                updated_count = cur.rowcount
+                await conn.commit()
+                print(f"✅ Updated total_spent for {updated_count} customers based on orders")
 
         print(
             f"✅ Bulk sync complete for {shop}: {total_orders} orders imported ({errors} errors)"
@@ -1039,10 +1064,6 @@ async def sync_customers(shop: str, shop_id: int, access_token: str):
             createdAt
             updatedAt
             numberOfOrders
-            amountSpent {
-              amount
-              currencyCode
-            }
             state
           }
         }
@@ -1151,7 +1172,9 @@ async def sync_customers(shop: str, shop_id: int, access_token: str):
                     print("✅ Customer bulk operation completed")
                     break
                 elif status in ["FAILED", "CANCELED", "EXPIRED"]:
-                    print(f"Customer sync failed: {status}")
+                    error_code = operation.get("errorCode")
+                    print(f"❌ Customer sync failed: {status} - Error code: {error_code}")
+                    print(f"❌ Full operation data: {json.dumps(operation, indent=2)}")
                     jsonl_url = operation.get("partialDataUrl")
                     break
 
@@ -1194,14 +1217,10 @@ async def sync_customers(shop: str, shop_id: int, access_token: str):
                         marketing_consent = customer.get("emailMarketingConsent", {})
                         accepts_marketing = marketing_consent.get("marketingState") == "SUBSCRIBED"
                         
-                        # Parse amount spent
-                        amount_spent_data = customer.get("amountSpent", {})
-                        total_spent = float(amount_spent_data.get("amount", 0))
-                        
                         # Get orders count
                         orders_count = int(customer.get("numberOfOrders", 0))
 
-                        # Insert/update customer
+                        # Insert/update customer (total_spent will be calculated from orders later)
                         await cur.execute(
                             """
                             INSERT INTO shopify.customers (
@@ -1219,7 +1238,6 @@ async def sync_customers(shop: str, shop_id: int, access_token: str):
                                 accepts_marketing = EXCLUDED.accepts_marketing,
                                 updated_at = EXCLUDED.updated_at,
                                 phone = EXCLUDED.phone,
-                                total_spent = EXCLUDED.total_spent,
                                 orders_count = EXCLUDED.orders_count,
                                 state = EXCLUDED.state,
                                 raw_json = EXCLUDED.raw_json
@@ -1234,10 +1252,10 @@ async def sync_customers(shop: str, shop_id: int, access_token: str):
                                 customer.get("createdAt"),
                                 customer.get("updatedAt"),
                                 customer.get("phone"),
-                                total_spent,
+                                0.0,  # total_spent will be calculated from orders
                                 orders_count,
                                 customer.get("state"),
-                                json.dumps(customer),  # Store full JSON for reference
+                                json.dumps(customer),
                             ),
                         )
 
