@@ -8,47 +8,24 @@ import statistics
 router = APIRouter()
 
 
-async def get_shop_from_token(request: Request) -> str:
+def get_shop_from_token(payload: Dict[str, Any] = Depends(verify_shopify_session_token)) -> str:
     """
-    Extract shop domain from the Authorization header.
+    Extract shop domain from validated session token payload.
     
-    Note: Session token is already validated by router-level dependency.
-    This function just extracts the shop domain from the token.
+    The 'dest' claim contains the shop URL like: https://store.myshopify.com
     """
-    auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
-        raise HTTPException(401, "Missing authorization header")
+    dest = payload.get("dest", "")
+    if not dest:
+        raise HTTPException(401, "Missing shop in token")
     
-    token = auth_header.replace("Bearer ", "")
+    # Remove https:// prefix
+    shop_domain = dest.replace("https://", "").replace("http://", "")
     
-    # Manually decode the token to extract shop (already validated by router)
-    import jwt
-    import os
+    # Validate format
+    if not shop_domain.endswith(".myshopify.com"):
+        raise HTTPException(401, "Invalid shop domain in token")
     
-    try:
-        # Decode without verification since router already validated it
-        payload = jwt.decode(
-            token, 
-            os.getenv("SHOPIFY_API_SECRET"), 
-            algorithms=["HS256"],
-            options={"verify_signature": False}  # Skip verification - already done
-        )
-        
-        dest = payload.get("dest", "")
-        if not dest:
-            raise HTTPException(401, "Missing shop in token")
-        
-        # Remove https:// prefix
-        shop_domain = dest.replace("https://", "").replace("http://", "")
-        
-        # Validate format
-        if not shop_domain.endswith(".myshopify.com"):
-            raise HTTPException(401, "Invalid shop domain in token")
-        
-        return shop_domain
-        
-    except Exception as e:
-        raise HTTPException(401, f"Invalid token: {str(e)}")
+    return shop_domain
 
 
 @router.get("/forecasts/revenue")
