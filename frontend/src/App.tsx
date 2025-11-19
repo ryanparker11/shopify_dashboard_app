@@ -196,10 +196,10 @@ function AppContent() {
   // Helpers
   // --------------------------------------------------------------------
 
-  async function fetchOrdersSummary(shopDomain: string) {
+  async function fetchOrdersSummary() {
     try {
       const data = await authenticatedFetch<OrdersSummary>(
-        `/api/orders/summary?shop_domain=${encodeURIComponent(shopDomain)}`
+        `/api/orders/summary`
       );
       setTotalOrders(data.total_orders ?? null);
     } catch (e) {
@@ -207,12 +207,12 @@ function AppContent() {
     }
   }
 
-  const fetchCustomerLeaderboard = async (shopName: string) => {
+  const fetchCustomerLeaderboard = async () => {
     try {
-      console.log('🔍 Fetching customer leaderboard for shop:', shopName);
+      console.log('🔍 Fetching customer leaderboard');
 
       const data = await authenticatedFetch<CustomerLeaderboardResponse>(
-        `/api/customers/leaderboard?shop_domain=${encodeURIComponent(shopName)}&limit=50`
+        `/api/customers/leaderboard?limit=50`
       );
 
       console.log('✅ Customer leaderboard loaded successfully:', data.customers?.length || 0, 'customers');
@@ -223,12 +223,12 @@ function AppContent() {
     }
   };
 
-  const fetchChartData = async (shopName: string) => {
+  const fetchChartData = async () => {
     try {
-      console.log('🔍 Fetching charts for shop:', shopName);
+      console.log('🔍 Fetching charts');
 
       const data = await authenticatedFetch<ChartsResponse>(
-        `/api/charts/${encodeURIComponent(shopName)}`
+        `/api/charts`
       );
 
       console.log(
@@ -303,10 +303,8 @@ const downloadChart = async (chart: ChartData) => {
 };
 
   const downloadCustomerLeaderboard = async () => {
-  if (!shop) return;
-
   try {
-    const url = `/api/charts/${encodeURIComponent(shop)}/export/top_customers`;
+    const url = `/api/charts/export/top_customers`;
     console.log('Attempting to download customer leaderboard from:', url);
 
     const blob = await authenticatedBlobFetch(url);
@@ -434,9 +432,9 @@ const downloadChart = async (chart: ChartData) => {
           if (!isCancelled) {
             try {
               await Promise.all([
-                fetchChartData(shopParam),
-                fetchOrdersSummary(shopParam),
-                fetchCustomerLeaderboard(shopParam),
+                fetchChartData(),
+                fetchOrdersSummary(),
+                fetchCustomerLeaderboard(),
               ]);
               console.log('✅ All data fetched successfully');
             } catch (error) {
@@ -480,8 +478,8 @@ const downloadChart = async (chart: ChartData) => {
     if (!shop) return;
 
     const refresh = () => {
-      fetchOrdersSummary(shop);
-      fetchCustomerLeaderboard(shop);
+      fetchOrdersSummary();
+      fetchCustomerLeaderboard();
     };
 
     // Initial fetch
