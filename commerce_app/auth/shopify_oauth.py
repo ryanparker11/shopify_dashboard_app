@@ -327,42 +327,48 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
                         continue
 
                     try:
-                        order = json.loads(line)
-
+                        item = json.loads(line)
+                        
+                        # CRITICAL: Skip non-Order objects (like LineItems)
+                        # Bulk API returns Orders AND LineItems as separate JSONL lines
+                        item_id = item.get("id", "")
+                        if "/Order/" not in item_id:
+                            continue  # Skip LineItem, Customer, etc.
+                        
                         # Convert GraphQL format to REST format for process_order_webhook
                         rest_format_order = {
-                            "id": order.get("id", "").split("/")[
+                            "id": item.get("id", "").split("/")[
                                 -1
                             ],  # Extract numeric ID from gid://
-                            "name": order.get("name"),
-                            "order_number": order.get("name", "").replace("#", ""),
-                            "email": order.get("email"),
-                            "total_price": order.get("totalPriceSet", {})
+                            "name": item.get("name"),
+                            "order_number": item.get("name", "").replace("#", ""),
+                            "email": item.get("email"),
+                            "total_price": item.get("totalPriceSet", {})
                             .get("shopMoney", {})
                             .get("amount", "0"),
-                            "subtotal_price": order.get("subtotalPriceSet", {})
+                            "subtotal_price": item.get("subtotalPriceSet", {})
                             .get("shopMoney", {})
                             .get("amount", "0"),
-                            "total_tax": order.get("totalTaxSet", {})
+                            "total_tax": item.get("totalTaxSet", {})
                             .get("shopMoney", {})
                             .get("amount", "0"),
-                            "currency": order.get("totalPriceSet", {})
+                            "currency": item.get("totalPriceSet", {})
                             .get("shopMoney", {})
                             .get("currencyCode", "USD"),
-                            "financial_status": order.get("displayFinancialStatus"),
-                            "fulfillment_status": order.get(
+                            "financial_status": item.get("displayFinancialStatus"),
+                            "fulfillment_status": item.get(
                                 "displayFulfillmentStatus"
                             ),
-                            "created_at": order.get("createdAt"),
-                            "updated_at": order.get("updatedAt"),
+                            "created_at": item.get("createdAt"),
+                            "updated_at": item.get("updatedAt"),
                             "customer": {
-                                "id": order.get("customer", {})
+                                "id": item.get("customer", {})
                                 .get("id", "")
                                 .split("/")[-1]
-                                if order.get("customer")
+                                if item.get("customer")
                                 else None
                             },
-                            "line_items": order.get("lineItems", {}).get("edges", []),
+                            "line_items": item.get("lineItems", {}).get("edges", []),
                         }
 
                         await process_order_webhook(cur, shop_id, rest_format_order)
