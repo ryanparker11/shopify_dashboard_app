@@ -15,7 +15,7 @@ from commerce_app.core.routers import webhooks, health, analytics
 from commerce_app.auth.shopify_oauth import router as shopify_auth
 from commerce_app.core.routers import cogs
 from commerce_app.core.routers.gdpr_webhooks import router as gdpr_router
-from commerce_app.core.routers import forecasts as forecasts_router
+from commerce_app.core.routers import Forecasts as forecasts_router
 
 # Session token verifier
 from commerce_app.auth.session_tokens import verify_shopify_session_token
