@@ -1,6 +1,7 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 from commerce_app.core.db import get_conn
+from commerce_app.auth.session_tokens import verify_shopify_session_token
 from typing import List, Dict, Any
 from io import BytesIO
 from datetime import datetime
@@ -8,8 +9,34 @@ import pandas as pd
 
 router = APIRouter()
 
+
+def get_shop_from_token(payload: Dict[str, Any] = Depends(verify_shopify_session_token)) -> str:
+    """
+    Extract shop domain from validated session token payload.
+    
+    The 'dest' claim contains the shop URL like: https://store.myshopify.com
+    """
+    dest = payload.get("dest", "")
+    if not dest:
+        raise HTTPException(401, "Missing shop in token")
+    
+    # Remove https:// prefix
+    shop_domain = dest.replace("https://", "").replace("http://", "")
+    
+    # Validate format
+    if not shop_domain.endswith(".myshopify.com"):
+        raise HTTPException(401, "Invalid shop domain in token")
+    
+    return shop_domain
+
+
 @router.get("/orders/summary")
-async def orders_summary(shop_domain: str):
+async def orders_summary(shop_domain: str = Depends(get_shop_from_token)):
+    """
+    Get orders summary for authenticated shop.
+    
+    Security: shop_domain extracted from validated session token.
+    """
     sql = """
     SELECT
       COUNT(*)::int                         AS total_orders,
@@ -31,8 +58,17 @@ async def orders_summary(shop_domain: str):
                 "avg_order_value": float(aov) if aov is not None else 0.0,
             }
 
+
 @router.get("/orders/revenue-by-day")
-async def revenue_by_day(shop_domain: str, days: int = 30):
+async def revenue_by_day(
+    shop_domain: str = Depends(get_shop_from_token),
+    days: int = 30
+):
+    """
+    Get daily revenue for authenticated shop.
+    
+    Security: shop_domain extracted from validated session token.
+    """
     sql = """
     SELECT order_date::text, COALESCE(gross_revenue,0)::numeric
     FROM shopify.v_order_daily
@@ -48,9 +84,15 @@ async def revenue_by_day(shop_domain: str, days: int = 30):
 
 
 @router.get("/customers/leaderboard")
-async def customer_leaderboard(shop_domain: str, limit: int = 50):
+async def customer_leaderboard(
+    shop_domain: str = Depends(get_shop_from_token),
+    limit: int = 50
+):
     """
     Customer leaderboard with revenue, orders, profit, AOV, and last order date.
+    
+    Security: shop_domain extracted from validated session token.
+    
     Profit is calculated using the same logic as cogs.py - matching COGS via variant_id.
     Filters out line items with NULL variant_id to ensure accurate COGS matching.
     """
@@ -166,10 +208,12 @@ async def customer_leaderboard(shop_domain: str, limit: int = 50):
             }
 
 
-@router.get("/charts/{shop_domain}")
-async def get_charts(shop_domain: str) -> Dict[str, List[Dict[str, Any]]]:
+@router.get("/charts")
+async def get_charts(shop_domain: str = Depends(get_shop_from_token)) -> Dict[str, List[Dict[str, Any]]]:
     """
-    Generate Plotly chart data for a specific shop, and include export URLs.
+    Generate Plotly chart data for authenticated shop, and include export URLs.
+    
+    Security: shop_domain extracted from validated session token.
     """
     try:
         charts: List[Dict[str, Any]] = []
@@ -205,7 +249,7 @@ async def get_charts(shop_domain: str) -> Dict[str, List[Dict[str, Any]]]:
                             "xaxis": {"title": "Month"},
                             "yaxis": {"title": "Revenue ($)"}
                         },
-                        "export_url": f"/charts/{shop_domain}/export/monthly_revenue"
+                        "export_url": "/charts/export/monthly_revenue"
                     })
 
             # Chart 2: Top 5 Products (% of Total Revenue) with "Other"
@@ -258,7 +302,7 @@ async def get_charts(shop_domain: str) -> Dict[str, List[Dict[str, Any]]]:
                         "layout": {
                             "title": "Top 5 Products (% of Revenue)"
                         },
-                        "export_url": f"/charts/{shop_domain}/export/top_products_revenue"
+                        "export_url": "/charts/export/top_products_revenue"
                     })
 
             # Chart 3: Daily Orders (Line Chart) - Last 30 days
@@ -293,7 +337,7 @@ async def get_charts(shop_domain: str) -> Dict[str, List[Dict[str, Any]]]:
                             "xaxis": {"title": "Date"},
                             "yaxis": {"title": "Number of Orders"}
                         },
-                        "export_url": f"/charts/{shop_domain}/export/daily_orders_30d"
+                        "export_url": "/charts/export/daily_orders_30d"
                     })
 
             # Chart 4: Revenue by Day (using your existing view)
@@ -325,7 +369,7 @@ async def get_charts(shop_domain: str) -> Dict[str, List[Dict[str, Any]]]:
                             "xaxis": {"title": "Date"},
                             "yaxis": {"title": "Revenue ($)"}
                         },
-                        "export_url": f"/charts/{shop_domain}/export/daily_revenue_30d"
+                        "export_url": "/charts/export/daily_revenue_30d"
                     })
 
             # Chart 5: Top Customers by Revenue
@@ -370,7 +414,7 @@ async def get_charts(shop_domain: str) -> Dict[str, List[Dict[str, Any]]]:
                             "xaxis": {"title": "Customer"},
                             "yaxis": {"title": "Total Revenue ($)"}
                         },
-                        "export_url": f"/charts/{shop_domain}/export/top_customers"
+                        "export_url": "/charts/export/top_customers"
                     })
 
         if not charts:
@@ -382,10 +426,16 @@ async def get_charts(shop_domain: str) -> Dict[str, List[Dict[str, Any]]]:
         raise HTTPException(status_code=500, detail=f"Error generating charts: {str(e)}")
 
 
-@router.get("/charts/{shop_domain}/export/{chart_key}")
-async def export_chart_excel(shop_domain: str, chart_key: str):
+@router.get("/charts/export/{chart_key}")
+async def export_chart_excel(
+    chart_key: str,
+    shop_domain: str = Depends(get_shop_from_token)
+):
     """
     Export the underlying dataset for a chart as an Excel file.
+    
+    Security: shop_domain extracted from validated session token.
+    
     Valid chart_key values:
       - monthly_revenue
       - top_products_revenue
