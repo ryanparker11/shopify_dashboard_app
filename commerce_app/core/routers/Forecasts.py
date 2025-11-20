@@ -387,7 +387,7 @@ async def forecast_customer_lifetime_value(
             LEFT JOIN shopify.orders o 
                 ON o.shop_id = c.shop_id 
                 AND o.customer_id = c.customer_id
-                AND o.financial_status IN ('paid', 'authorized', 'partially_paid')
+                AND o.financial_status IN ('paid', 'PAID', 'authorized', 'partially_paid')
             WHERE c.shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
             GROUP BY c.customer_id, c.email, c.first_name, c.last_name, c.orders_count, c.total_spent
             HAVING COUNT(DISTINCT o.order_id) > 0
