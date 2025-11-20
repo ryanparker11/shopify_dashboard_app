@@ -47,11 +47,11 @@ async def forecast_revenue(
     sql = """
     SELECT 
         order_date::text,
-        COALESCE(SUM(gross_revenue), 0)::numeric as revenue
+        COALESCE(gross_revenue, 0)::numeric as revenue
     FROM shopify.v_order_daily
     WHERE shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
+      AND order_date IS NOT NULL
       AND order_date >= current_date - %s::int
-    GROUP BY order_date
     ORDER BY order_date;
     """
     
@@ -150,13 +150,14 @@ async def forecast_orders(
     """
     sql = """
     SELECT 
-        DATE(created_at) as order_date,
+        order_date,
         COUNT(*)::int as order_count
     FROM shopify.orders
     WHERE shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
-      AND created_at >= current_date - %s::int
+      AND order_date IS NOT NULL
+      AND order_date >= current_date - %s::int
       AND financial_status IN ('paid', 'authorized', 'partially_paid')
-    GROUP BY DATE(created_at)
+    GROUP BY order_date
     ORDER BY order_date;
     """
     
@@ -265,14 +266,14 @@ async def forecast_inventory_depletion(
             SUM(
                 (li.value->>'quantity')::int
             )::int as units_sold,
-            MAX(o.created_at) as last_sale_date
+            MAX(o.order_date) as last_sale_date
         FROM shopify.orders o
         CROSS JOIN LATERAL jsonb_array_elements(o.line_items) li
         LEFT JOIN shopify.product_variants pv 
             ON pv.shop_id = o.shop_id 
             AND pv.variant_id = (li.value->>'variant_id')::bigint
         WHERE o.shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
-          AND o.created_at >= current_date - 30
+          AND o.order_date >= current_date - 30
           AND o.financial_status IN ('paid', 'authorized', 'partially_paid')
           AND pv.product_id IS NOT NULL
         GROUP BY pv.product_id, pv.variant_id
@@ -394,9 +395,9 @@ async def forecast_customer_lifetime_value(
                 COUNT(DISTINCT o.order_id)::int as total_orders,
                 COALESCE(SUM(o.total_price), 0)::numeric as total_spent,
                 COALESCE(AVG(o.total_price), 0)::numeric as avg_order_value,
-                MIN(o.created_at) as first_order_date,
-                MAX(o.created_at) as last_order_date,
-                EXTRACT(days FROM MAX(o.created_at) - MIN(o.created_at))::int as customer_lifespan_days,
+                MIN(o.order_date) as first_order_date,
+                MAX(o.order_date) as last_order_date,
+                EXTRACT(days FROM MAX(o.order_date) - MIN(o.order_date))::int as customer_lifespan_days,
                 c.orders_count as shopify_order_count,
                 c.total_spent as shopify_total_spent
             FROM shopify.customers c
@@ -475,7 +476,7 @@ async def forecast_customer_lifetime_value(
                     predicted_clv = float(aov) * monthly_frequency * predicted_lifespan_months
                     
                     # Calculate churn risk based on days since last order
-                    days_since_last_order = (datetime.now() - last_order).days if last_order else 999
+                    days_since_last_order = (datetime.now().date() - last_order).days if last_order else 999
                     churn_risk = "high" if days_since_last_order > 90 else \
                                 "medium" if days_since_last_order > 60 else "low"
                     
