@@ -78,28 +78,20 @@ async def forecast_revenue(
             
             # Calculate trend using simple linear regression
             n = len(revenues)
-            if n < 7:
-                # Return what we have without forecast
-                avg_revenue = sum(revenues) / n if n > 0 else 0
-                return {
-                    "historical": historical_data,
-                    "forecast": [],
-                    "metrics": {
-                        "avg_daily_revenue": round(avg_revenue, 2),
-                        "daily_trend": 0,
-                        "forecast_total": 0
-                    }
-                }
             
-            # Calculate moving average and trend
-            window = min(14, n // 2)  # 14-day moving average or half the data
-            moving_avg = statistics.mean(revenues[-window:])
+            # Calculate moving average (use all available data if less than 14 days)
+            window = min(14, n) if n >= 3 else n
+            moving_avg = statistics.mean(revenues[-window:]) if window > 0 else 0
             
-            # Simple trend: compare recent period to older period
-            mid_point = n // 2
-            older_avg = statistics.mean(revenues[:mid_point])
-            recent_avg = statistics.mean(revenues[mid_point:])
-            daily_trend = (recent_avg - older_avg) / mid_point if mid_point > 0 else 0
+            # Calculate trend (needs at least 3 data points)
+            if n >= 3:
+                mid_point = max(1, n // 2)  # At least 1 for division
+                older_avg = statistics.mean(revenues[:mid_point])
+                recent_avg = statistics.mean(revenues[mid_point:])
+                daily_trend = (recent_avg - older_avg) / mid_point if mid_point > 0 else 0
+            else:
+                # Not enough data for trend, just use average
+                daily_trend = 0
             
             # Generate forecast
             forecast = []
@@ -156,7 +148,7 @@ async def forecast_orders(
     WHERE shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
       AND order_date IS NOT NULL
       AND order_date >= current_date - %s::int
-      AND financial_status IN ('paid', 'authorized', 'partially_paid')
+      AND financial_status IN ('paid', 'PAID',  'authorized', 'partially_paid')
     GROUP BY order_date
     ORDER BY order_date;
     """
@@ -184,29 +176,20 @@ async def forecast_orders(
             
             # Calculate statistics
             n = len(order_counts)
-            if n < 7:
-                # Return what we have
-                avg_orders = sum(order_counts) / n if n > 0 else 0
-                return {
-                    "historical": historical_data,
-                    "forecast": [],
-                    "metrics": {
-                        "avg_daily_orders": round(avg_orders, 2),
-                        "daily_trend": 0,
-                        "std_deviation": 0,
-                        "forecast_total": 0
-                    }
-                }
             
-            window = min(14, n // 2)
-            moving_avg = statistics.mean(order_counts[-window:])
+            # Use all available data if less than 14 days
+            window = min(14, n) if n >= 3 else n
+            moving_avg = statistics.mean(order_counts[-window:]) if window > 0 else 0
             std_dev = statistics.stdev(order_counts[-window:]) if len(order_counts[-window:]) > 1 else 0
             
-            # Calculate trend
-            mid_point = n // 2
-            older_avg = statistics.mean(order_counts[:mid_point])
-            recent_avg = statistics.mean(order_counts[mid_point:])
-            daily_trend = (recent_avg - older_avg) / mid_point if mid_point > 0 else 0
+            # Calculate trend (needs at least 3 data points)
+            if n >= 3:
+                mid_point = max(1, n // 2)
+                older_avg = statistics.mean(order_counts[:mid_point])
+                recent_avg = statistics.mean(order_counts[mid_point:])
+                daily_trend = (recent_avg - older_avg) / mid_point if mid_point > 0 else 0
+            else:
+                daily_trend = 0
             
             # Generate forecast
             forecast = []
@@ -274,7 +257,7 @@ async def forecast_inventory_depletion(
             AND pv.variant_id = (li.value->>'variant_id')::bigint
         WHERE o.shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
           AND o.order_date >= current_date - 30
-          AND o.financial_status IN ('paid', 'authorized', 'partially_paid')
+          AND o.financial_status IN ('paid', 'PAID', 'authorized', 'partially_paid')
           AND pv.product_id IS NOT NULL
         GROUP BY pv.product_id, pv.variant_id
     ),
@@ -404,7 +387,7 @@ async def forecast_customer_lifetime_value(
             LEFT JOIN shopify.orders o 
                 ON o.shop_id = c.shop_id 
                 AND o.customer_id = c.customer_id
-                AND o.financial_status IN ('paid', 'authorized', 'partially_paid')
+                AND o.financial_status IN ('paid', 'PAID', 'authorized', 'partially_paid')
             WHERE c.shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
             GROUP BY c.customer_id, c.email, c.first_name, c.last_name, c.orders_count, c.total_spent
             HAVING COUNT(DISTINCT o.order_id) > 0
