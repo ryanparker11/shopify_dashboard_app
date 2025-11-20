@@ -5,6 +5,7 @@ import hmac
 import hashlib
 import base64
 from typing import Optional
+from datetime import datetime
 import os
 import traceback
 
@@ -98,7 +99,7 @@ async def process_webhook(shop_domain: str, topic: str, payload: dict, webhook_r
 async def process_order_webhook(cur, shop_id: int, payload: dict):
     """
     Process orders/create and orders/updated webhooks.
-    Now includes: email, order_number, line_items, raw_json
+    UPDATED: Now extracts order_date from created_at
     """
     order_id = payload.get("id")
     
@@ -124,7 +125,26 @@ async def process_order_webhook(cur, shop_id: int, payload: dict):
     elif payload.get("shipping_price"):
         shipping_price = payload.get("shipping_price")
     
-    # Upsert order data with ALL fields
+    # UPDATED: Parse created_at to extract both time and date
+    created_at_str = payload.get("created_at")
+    created_time = None
+    order_date = None
+    
+    if created_at_str:
+        try:
+            # Handle ISO format timestamps (e.g. "2025-11-19T12:34:56-05:00")
+            created_dt = datetime.fromisoformat(created_at_str.replace('Z', '+00:00'))
+            created_time = created_dt.time()
+            order_date = created_dt.date()
+        except Exception as e:
+            print(f"⚠️  Error parsing created_at '{created_at_str}': {e}")
+            # Fallback: try to extract just the date portion
+            try:
+                order_date = datetime.fromisoformat(created_at_str.split('T')[0]).date()
+            except:
+                pass
+    
+    # Upsert order data with ALL fields including order_date
     await cur.execute(
         """
         INSERT INTO shopify.orders (
@@ -146,10 +166,11 @@ async def process_order_webhook(cur, shop_id: int, payload: dict):
             line_items,
             raw_json,
             created_at,
+            order_date,
             updated_at
         ) VALUES (
             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 
-            %s, %s, %s, %s, %s, %s, %s, %s, %s
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
         )
         ON CONFLICT (shop_id, order_id) 
         DO UPDATE SET
@@ -168,6 +189,7 @@ async def process_order_webhook(cur, shop_id: int, payload: dict):
             total_price = EXCLUDED.total_price,
             line_items = EXCLUDED.line_items,
             raw_json = EXCLUDED.raw_json,
+            order_date = EXCLUDED.order_date,
             updated_at = EXCLUDED.updated_at;
         """,
         (
@@ -188,7 +210,8 @@ async def process_order_webhook(cur, shop_id: int, payload: dict):
             payload.get("total_price", "0.00"),
             json.dumps(payload.get("line_items", [])),  # Store product info
             json.dumps(payload),  # Store complete webhook for debugging
-            payload.get("created_at"),
+            created_time,  # TIME for Excel export
+            order_date,    # DATE for analytics/forecasts
             payload.get("updated_at")
         )
     )
@@ -247,7 +270,7 @@ async def process_order_webhook(cur, shop_id: int, payload: dict):
             )
         )
     
-    print(f"✅ Processed order {payload.get('name')} - ${payload.get('total_price')} from {email}")
+    print(f"✅ Processed order {payload.get('name')} - ${payload.get('total_price')} from {email} (date: {order_date})")
 
 
 # ============================================================================
@@ -533,9 +556,6 @@ async def webhook_ingest(
     )
     
     return {"status": "ok"}
-
-
-
 
 
 @router.get("/status")

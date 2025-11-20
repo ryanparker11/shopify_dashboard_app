@@ -148,7 +148,7 @@ async def forecast_orders(
     WHERE shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
       AND order_date IS NOT NULL
       AND order_date >= current_date - %s::int
-      AND financial_status IN ('paid', 'PAID',  'authorized', 'partially_paid')
+      AND financial_status IN ('paid', 'PAID', 'authorized', 'partially_paid')
     GROUP BY order_date
     ORDER BY order_date;
     """
@@ -257,7 +257,7 @@ async def forecast_inventory_depletion(
             AND pv.variant_id = (li.value->>'variant_id')::bigint
         WHERE o.shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
           AND o.order_date >= current_date - 30
-          AND o.financial_status IN ('paid', 'PAID', 'authorized', 'partially_paid')
+          AND o.financial_status IN ('paid', 'PAID',  'authorized', 'partially_paid')
           AND pv.product_id IS NOT NULL
         GROUP BY pv.product_id, pv.variant_id
     ),
@@ -380,14 +380,14 @@ async def forecast_customer_lifetime_value(
                 COALESCE(AVG(o.total_price), 0)::numeric as avg_order_value,
                 MIN(o.order_date) as first_order_date,
                 MAX(o.order_date) as last_order_date,
-                EXTRACT(days FROM MAX(o.order_date) - MIN(o.order_date))::int as customer_lifespan_days,
+                (MAX(o.order_date) - MIN(o.order_date))::int as customer_lifespan_days,
                 c.orders_count as shopify_order_count,
                 c.total_spent as shopify_total_spent
             FROM shopify.customers c
             LEFT JOIN shopify.orders o 
                 ON o.shop_id = c.shop_id 
                 AND o.customer_id = c.customer_id
-                AND o.financial_status IN ('paid', 'PAID', 'authorized', 'partially_paid')
+                AND o.financial_status IN ('paid', 'paid', 'authorized', 'partially_paid')
             WHERE c.shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
             GROUP BY c.customer_id, c.email, c.first_name, c.last_name, c.orders_count, c.total_spent
             HAVING COUNT(DISTINCT o.order_id) > 0
