@@ -271,7 +271,7 @@ async def forecast_inventory_depletion(
         JOIN shopify.products p ON p.shop_id = pv.shop_id AND p.product_id = pv.product_id
         WHERE pv.shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
           AND pv.inventory_quantity > 0
-          AND UPPER(pv.inventory_policy) LIKE '%DENY%'  -- Match DENY, deny, 1 DENY, etc.
+          AND pv.inventory_policy IN ('deny', 'DENY')  -- Match DENY, deny, 1 DENY, etc.
     )
     SELECT 
         i.product_id,
