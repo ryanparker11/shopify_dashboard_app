@@ -65,20 +65,30 @@ async def revenue_by_day(
     days: int = 30
 ):
     """
-    Get daily revenue for authenticated shop.
+    Get daily revenue for authenticated shop with ALL dates (including zero-revenue days).
     
     Security: shop_domain extracted from validated session token.
     """
     sql = """
-    SELECT order_date::text, COALESCE(gross_revenue,0)::numeric
-    FROM shopify.v_order_daily
-    WHERE shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
-      AND order_date >= current_date - %s::int
-    ORDER BY order_date;
+    WITH date_series AS (
+        SELECT generate_series(
+            current_date - %s::int,
+            current_date,
+            '1 day'::interval
+        )::date AS order_date
+    )
+    SELECT 
+        ds.order_date::text,
+        COALESCE(v.gross_revenue, 0)::numeric
+    FROM date_series ds
+    LEFT JOIN shopify.v_order_daily v 
+        ON v.order_date = ds.order_date
+        AND v.shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
+    ORDER BY ds.order_date;
     """
     async with get_conn() as conn:
         async with conn.cursor() as cur:
-            await cur.execute(sql, (shop_domain, days))
+            await cur.execute(sql, (days, shop_domain))
             rows = await cur.fetchall()
             return [{"date": d, "revenue": float(r)} for d, r in rows]
 
@@ -305,16 +315,24 @@ async def get_charts(shop_domain: str = Depends(get_shop_from_token)) -> Dict[st
                         "export_url": "/charts/export/top_products_revenue"
                     })
 
-            # Chart 3: Daily Orders (Line Chart) - Last 30 days
+            # Chart 3: Daily Orders (Line Chart) - Last 30 days with ALL dates
             daily_orders_sql = """
+            WITH date_series AS (
+                SELECT generate_series(
+                    current_date - 30,
+                    current_date,
+                    '1 day'::interval
+                )::date AS order_date
+            )
             SELECT 
-                DATE(created_at) as order_date,
-                COUNT(*)::int as order_count
-            FROM shopify.orders
-            WHERE shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
-              AND created_at >= NOW() - INTERVAL '30 days'
-            GROUP BY DATE(created_at)
-            ORDER BY order_date;
+                ds.order_date,
+                COALESCE(COUNT(o.order_id), 0)::int as order_count
+            FROM date_series ds
+            LEFT JOIN shopify.orders o 
+                ON DATE(o.created_at) = ds.order_date
+                AND o.shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
+            GROUP BY ds.order_date
+            ORDER BY ds.order_date;
             """
             async with conn.cursor() as cur:
                 await cur.execute(daily_orders_sql, (shop_domain,))
@@ -340,13 +358,23 @@ async def get_charts(shop_domain: str = Depends(get_shop_from_token)) -> Dict[st
                         "export_url": "/charts/export/daily_orders_30d"
                     })
 
-            # Chart 4: Revenue by Day (using your existing view)
+            # Chart 4: Revenue by Day with ALL dates
             revenue_sql = """
-            SELECT order_date::text, COALESCE(gross_revenue,0)::numeric
-            FROM shopify.v_order_daily
-            WHERE shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
-              AND order_date >= current_date - 30
-            ORDER BY order_date;
+            WITH date_series AS (
+                SELECT generate_series(
+                    current_date - 30,
+                    current_date,
+                    '1 day'::interval
+                )::date AS order_date
+            )
+            SELECT 
+                ds.order_date::text,
+                COALESCE(v.gross_revenue, 0)::numeric
+            FROM date_series ds
+            LEFT JOIN shopify.v_order_daily v 
+                ON v.order_date = ds.order_date
+                AND v.shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
+            ORDER BY ds.order_date;
             """
             async with conn.cursor() as cur:
                 await cur.execute(revenue_sql, (shop_domain,))
@@ -499,12 +527,22 @@ async def export_chart_excel(
 
             elif chart_key == "daily_orders_30d":
                 sql = """
-                SELECT DATE(created_at) as order_date, COUNT(*)::int as order_count
-                FROM shopify.orders
-                WHERE shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
-                  AND created_at >= NOW() - INTERVAL '30 days'
-                GROUP BY DATE(created_at)
-                ORDER BY order_date;
+                WITH date_series AS (
+                    SELECT generate_series(
+                        current_date - 30,
+                        current_date,
+                        '1 day'::interval
+                    )::date AS order_date
+                )
+                SELECT 
+                    ds.order_date,
+                    COALESCE(COUNT(o.order_id), 0)::int as order_count
+                FROM date_series ds
+                LEFT JOIN shopify.orders o 
+                    ON DATE(o.created_at) = ds.order_date
+                    AND o.shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
+                GROUP BY ds.order_date
+                ORDER BY ds.order_date;
                 """
                 async with conn.cursor() as cur:
                     await cur.execute(sql, (shop_domain,))
@@ -513,11 +551,21 @@ async def export_chart_excel(
 
             elif chart_key == "daily_revenue_30d":
                 sql = """
-                SELECT order_date::date, COALESCE(gross_revenue,0)::numeric
-                FROM shopify.v_order_daily
-                WHERE shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
-                  AND order_date >= current_date - 30
-                ORDER BY order_date;
+                WITH date_series AS (
+                    SELECT generate_series(
+                        current_date - 30,
+                        current_date,
+                        '1 day'::interval
+                    )::date AS order_date
+                )
+                SELECT 
+                    ds.order_date,
+                    COALESCE(v.gross_revenue, 0)::numeric
+                FROM date_series ds
+                LEFT JOIN shopify.v_order_daily v 
+                    ON v.order_date = ds.order_date
+                    AND v.shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
+                ORDER BY ds.order_date;
                 """
                 async with conn.cursor() as cur:
                     await cur.execute(sql, (shop_domain,))
