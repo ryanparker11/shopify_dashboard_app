@@ -45,19 +45,26 @@ async def forecast_revenue(
         lookback_days: Historical days to use for prediction (default 90)
     """
     sql = """
+    WITH date_series AS (
+        SELECT generate_series(
+            current_date - %s::int,
+            current_date,
+            '1 day'::interval
+        )::date AS order_date
+    )
     SELECT 
-        order_date::text,
-        COALESCE(gross_revenue, 0)::numeric as revenue
-    FROM shopify.v_order_daily
-    WHERE shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
-      AND order_date IS NOT NULL
-      AND order_date >= current_date - %s::int
-    ORDER BY order_date;
+        ds.order_date::text,
+        COALESCE(v.gross_revenue, 0)::numeric as revenue
+    FROM date_series ds
+    LEFT JOIN shopify.v_order_daily v 
+        ON v.order_date = ds.order_date
+        AND v.shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
+    ORDER BY ds.order_date;
     """
     
     async with get_conn() as conn:
         async with conn.cursor() as cur:
-            await cur.execute(sql, (shop_domain, lookback_days))
+            await cur.execute(sql, (lookback_days, shop_domain))
             rows = await cur.fetchall()
             
             if not rows:
@@ -131,7 +138,7 @@ async def forecast_orders(
     shop_domain: str = Depends(get_shop_from_token)
 ):
     """
-    Order volume forecast using historical patterns.
+    Order volume forecast using historical patterns with complete date series.
     
     Security: shop_domain extracted from validated session token.
     
@@ -141,21 +148,28 @@ async def forecast_orders(
         lookback_days: Historical days to use for prediction
     """
     sql = """
+    WITH date_series AS (
+        SELECT generate_series(
+            current_date - %s::int,
+            current_date,
+            '1 day'::interval
+        )::date AS order_date
+    )
     SELECT 
-        order_date,
-        COUNT(*)::int as order_count
-    FROM shopify.orders
-    WHERE shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
-      AND order_date IS NOT NULL
-      AND order_date >= current_date - %s::int
-      AND financial_status IN ('paid', 'PAID', 'authorized', 'partially_paid')
-    GROUP BY order_date
-    ORDER BY order_date;
+        ds.order_date,
+        COALESCE(COUNT(o.order_id), 0)::int as order_count
+    FROM date_series ds
+    LEFT JOIN shopify.orders o 
+        ON o.order_date = ds.order_date
+        AND o.shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
+        AND o.financial_status IN ('paid', 'PAID', 'authorized', 'partially_paid')
+    GROUP BY ds.order_date
+    ORDER BY ds.order_date;
     """
     
     async with get_conn() as conn:
         async with conn.cursor() as cur:
-            await cur.execute(sql, (shop_domain, lookback_days))
+            await cur.execute(sql, (lookback_days, shop_domain))
             rows = await cur.fetchall()
             
             if not rows:
@@ -223,6 +237,7 @@ async def forecast_orders(
                     "forecast_total": sum(f["forecast_orders"] for f in forecast)
                 }
             }
+
 
 
 @router.get("/forecasts/inventory-depletion")
