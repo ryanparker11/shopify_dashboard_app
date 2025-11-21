@@ -243,23 +243,20 @@ async def forecast_inventory_depletion(
     sql = """
     WITH recent_sales AS (
         SELECT 
-            pv.product_id,
-            pv.variant_id,
+            oli.product_id,
+            oli.variant_id,
             COUNT(DISTINCT o.order_id)::int as orders_count,
-            SUM(
-                (li.value->>'quantity')::int
-            )::int as units_sold,
+            SUM(oli.quantity)::int as units_sold,
             MAX(o.order_date) as last_sale_date
         FROM shopify.orders o
-        CROSS JOIN LATERAL jsonb_array_elements(o.line_items) li
-        LEFT JOIN shopify.product_variants pv 
-            ON pv.shop_id = o.shop_id 
-            AND pv.variant_id = (li.value->>'variant_id')::bigint
+        JOIN shopify.order_line_items oli 
+            ON oli.shop_id = o.shop_id 
+            AND oli.order_id = o.order_id
         WHERE o.shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
           AND o.order_date >= current_date - 30
-          AND o.financial_status IN ('paid', 'PAID',  'authorized', 'partially_paid')
-          AND pv.product_id IS NOT NULL
-        GROUP BY pv.product_id, pv.variant_id
+          AND o.financial_status IN ('paid', 'PAID', 'authorized', 'partially_paid')
+          AND oli.variant_id IS NOT NULL
+        GROUP BY oli.product_id, oli.variant_id
     ),
     inventory_levels AS (
         SELECT 
@@ -274,7 +271,7 @@ async def forecast_inventory_depletion(
         JOIN shopify.products p ON p.shop_id = pv.shop_id AND p.product_id = pv.product_id
         WHERE pv.shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
           AND pv.inventory_quantity > 0
-          AND pv.inventory_policy = 'deny'  -- Only track items that stop selling when out of stock
+          AND UPPER(pv.inventory_policy) LIKE '%DENY%'  -- Match DENY, deny, 1 DENY, etc.
     )
     SELECT 
         i.product_id,
@@ -387,7 +384,7 @@ async def forecast_customer_lifetime_value(
             LEFT JOIN shopify.orders o 
                 ON o.shop_id = c.shop_id 
                 AND o.customer_id = c.customer_id
-                AND o.financial_status IN ('paid', 'paid', 'authorized', 'partially_paid')
+                AND o.financial_status IN ('paid', 'PAID', 'authorized', 'partially_paid')
             WHERE c.shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
             GROUP BY c.customer_id, c.email, c.first_name, c.last_name, c.orders_count, c.total_spent
             HAVING COUNT(DISTINCT o.order_id) > 0
