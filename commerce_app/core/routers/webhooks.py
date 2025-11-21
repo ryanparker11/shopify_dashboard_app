@@ -125,16 +125,14 @@ async def process_order_webhook(cur, shop_id: int, payload: dict):
     elif payload.get("shipping_price"):
         shipping_price = payload.get("shipping_price")
     
-    # UPDATED: Parse created_at to extract both time and date
+    # UPDATED: Parse created_at to extract order_date
     created_at_str = payload.get("created_at")
-    created_time = None
     order_date = None
     
     if created_at_str:
         try:
             # Handle ISO format timestamps (e.g. "2025-11-19T12:34:56-05:00")
             created_dt = datetime.fromisoformat(created_at_str.replace('Z', '+00:00'))
-            created_time = created_dt.time()
             order_date = created_dt.date()
         except Exception as e:
             print(f"⚠️  Error parsing created_at '{created_at_str}': {e}")
@@ -210,7 +208,7 @@ async def process_order_webhook(cur, shop_id: int, payload: dict):
             payload.get("total_price", "0.00"),
             json.dumps(payload.get("line_items", [])),  # Store product info
             json.dumps(payload),  # Store complete webhook for debugging
-            created_time,  # TIME for Excel export
+            payload.get("created_at"),  # Full TIMESTAMPTZ
             order_date,    # DATE for analytics/forecasts
             payload.get("updated_at")
         )
