@@ -223,7 +223,7 @@ export function ForecastsPage({ shopDomain: shopDomainProp }: ForecastsPageProps
 
   // Inventory depletion table rows
   const inventoryRows = inventoryDepletion?.products
-    .filter(p => p.days_until_stockout !== null && p.days_until_stockout <= 60)
+    .filter(p => p.days_until_stockout !== null) // && p.days_until_stockout <= 60
     .slice(0, 10)
     .map(product => [
       product.product_title,
