@@ -75,6 +75,7 @@ async def forecast_revenue(
                     "metrics": {
                         "avg_daily_revenue": 0,
                         "daily_trend": 0,
+                        "historical_total_30d": 0,
                         "forecast_total": 0
                     }
                 }
@@ -120,12 +121,16 @@ async def forecast_revenue(
                     "confidence": "medium" if i <= 14 else "low"
                 })
             
+            # Calculate total revenue for last 30 days
+            last_30_days_revenue = sum([d["revenue"] for d in historical_data[-30:]])
+            
             return {
                 "historical": historical_data[-30:],  # Last 30 days
                 "forecast": forecast,
                 "metrics": {
                     "avg_daily_revenue": round(moving_avg, 2),
                     "daily_trend": round(daily_trend, 2),
+                    "historical_total_30d": round(last_30_days_revenue, 2),
                     "forecast_total": round(sum(f["forecast_revenue"] for f in forecast), 2)
                 }
             }
@@ -181,6 +186,7 @@ async def forecast_orders(
                         "avg_daily_orders": 0,
                         "daily_trend": 0,
                         "std_deviation": 0,
+                        "historical_total_30d": 0,
                         "forecast_total": 0
                     }
                 }
@@ -227,6 +233,9 @@ async def forecast_orders(
                     "confidence": "high" if i <= 7 else "medium" if i <= 14 else "low"
                 })
             
+            # Calculate total orders for last 30 days
+            last_30_days_orders = sum([d["orders"] for d in historical_data[-30:]])
+            
             return {
                 "historical": historical_data[-30:],
                 "forecast": forecast,
@@ -234,10 +243,10 @@ async def forecast_orders(
                     "avg_daily_orders": round(moving_avg, 2),
                     "daily_trend": round(daily_trend, 2),
                     "std_deviation": round(std_dev, 2),
+                    "historical_total_30d": last_30_days_orders,
                     "forecast_total": sum(f["forecast_orders"] for f in forecast)
                 }
             }
-
 
 
 @router.get("/forecasts/inventory-depletion")
@@ -286,7 +295,6 @@ async def forecast_inventory_depletion(
         JOIN shopify.products p ON p.shop_id = pv.shop_id AND p.product_id = pv.product_id
         WHERE pv.shop_id = (SELECT shop_id FROM shopify.shops WHERE shop_domain = %s)
           AND pv.inventory_quantity > 0
-          AND pv.inventory_policy IN ('deny', 'DENY')  -- Match DENY, deny, 1 DENY, etc.
     )
     SELECT 
         i.product_id,
