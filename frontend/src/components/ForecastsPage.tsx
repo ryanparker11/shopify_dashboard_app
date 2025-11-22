@@ -1,7 +1,18 @@
 import { useState, useEffect } from 'react';
 import Plot from 'react-plotly.js';
 import type { Data, Layout } from 'plotly.js';
-import { Card, Layout as PolarisLayout, Page, Text, BlockStack, InlineGrid, Select, Badge, DataTable, Banner } from '@shopify/polaris';
+import {
+  Card,
+  Layout as PolarisLayout,
+  Page,
+  Text,
+  BlockStack,
+  InlineGrid,
+  Select,
+  Badge,
+  DataTable,
+  Banner
+} from '@shopify/polaris';
 import { authenticatedFetch } from '../lib/api';
 
 // Type definitions
@@ -21,15 +32,17 @@ interface ForecastDataPoint {
   forecast_orders?: number;
   lower_bound?: number;
   upper_bound?: number;
-  confidence?: string;
+  confidence?: 'high' | 'medium' | 'low' | string;
 }
 
+// Revenue forecast now includes bounds + std_deviation metric
 interface RevenueForecast {
   historical: HistoricalDataPoint[];
   forecast: ForecastDataPoint[];
   metrics: {
     avg_daily_revenue: number;
     daily_trend: number;
+    std_deviation?: number; // NEW (from updated backend)
     historical_total_30d: number;
     forecast_total: number;
   };
@@ -47,6 +60,9 @@ interface OrderForecast {
   };
 }
 
+// Inventory now includes 60d sales, last_sale_date, and no_velocity risk
+type InventoryRisk = 'critical' | 'high' | 'medium' | 'low' | 'no_velocity';
+
 interface InventoryProduct {
   product_id: number;
   variant_id: number;
@@ -55,10 +71,12 @@ interface InventoryProduct {
   sku: string;
   current_inventory: number;
   units_sold_30d: number;
-  daily_velocity: number;
+  units_sold_60d?: number;       // NEW
+  daily_velocity: number;        // now blended velocity
   days_until_stockout: number | null;
   projected_stockout_date: string | null;
-  risk_level: 'critical' | 'high' | 'medium' | 'low';
+  risk_level: InventoryRisk;     // CHANGED
+  last_sale_date?: string | null; // NEW
 }
 
 interface InventoryDepletion {
@@ -68,9 +86,11 @@ interface InventoryDepletion {
     critical_risk: number;
     high_risk: number;
     medium_risk: number;
+    no_velocity?: number; // NEW
   };
 }
 
+// CLV now includes predicted lifespan months (optional to display)
 interface Customer {
   customer_id: number;
   email: string;
@@ -83,6 +103,7 @@ interface Customer {
   last_order_date: string | null;
   customer_lifespan_days: number;
   monthly_order_frequency: number;
+  predicted_lifespan_months?: number; // NEW
   predicted_clv: number;
   churn_risk: 'high' | 'medium' | 'low';
   days_since_last_order: number;
@@ -117,21 +138,20 @@ export function ForecastsPage({ shopDomain: shopDomainProp }: ForecastsPageProps
   const shopDomain = shopDomainProp || new URLSearchParams(window.location.search).get('shop');
 
   useEffect(() => {
-    if (shopDomain) {
-      loadForecasts();
-    }
+    if (shopDomain) loadForecasts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shopDomain, forecastDays, clvSegment]);
 
   const loadForecasts = async () => {
     setLoading(true);
     try {
-      // Load all forecasts in parallel with authenticated fetch
-      // Note: shop_domain is extracted from session token on backend, not sent in URL
       const [revenue, orders, inventory, clv] = await Promise.all([
         authenticatedFetch<RevenueForecast>(`/api/forecasts/revenue?days=${forecastDays}`),
         authenticatedFetch<OrderForecast>(`/api/forecasts/orders?days=${forecastDays}`),
         authenticatedFetch<InventoryDepletion>(`/api/forecasts/inventory-depletion`),
-        authenticatedFetch<CustomerCLV>(`/api/forecasts/customer-lifetime-value${clvSegment !== 'all' ? `?segment=${clvSegment}` : ''}`)
+        authenticatedFetch<CustomerCLV>(
+          `/api/forecasts/customer-lifetime-value${clvSegment !== 'all' ? `?segment=${clvSegment}` : ''}`
+        )
       ]);
 
       setRevenueForecast(revenue);
@@ -145,6 +165,9 @@ export function ForecastsPage({ shopDomain: shopDomainProp }: ForecastsPageProps
     }
   };
 
+  // -----------------------
+  // Revenue chart (UPDATED to show bounds band)
+  // -----------------------
   const revenueForecastChart = revenueForecast ? {
     data: [
       {
@@ -154,6 +177,26 @@ export function ForecastsPage({ shopDomain: shopDomainProp }: ForecastsPageProps
         mode: 'lines' as const,
         name: 'Historical Revenue',
         line: { color: '#008060', width: 2 }
+      },
+      {
+        x: revenueForecast.forecast?.map(d => d.date) || [],
+        y: revenueForecast.forecast?.map(d => d.upper_bound ?? d.forecast_revenue ?? 0) || [],
+        type: 'scatter' as const,
+        mode: 'lines' as const,
+        name: 'Upper Bound',
+        line: { color: '#E3E3E3', width: 1, dash: 'dot' },
+        showlegend: false
+      },
+      {
+        x: revenueForecast.forecast?.map(d => d.date) || [],
+        y: revenueForecast.forecast?.map(d => d.lower_bound ?? d.forecast_revenue ?? 0) || [],
+        type: 'scatter' as const,
+        mode: 'lines' as const,
+        name: 'Lower Bound',
+        fill: 'tonexty' as const,
+        fillcolor: 'rgba(92, 106, 196, 0.10)',
+        line: { color: '#E3E3E3', width: 1, dash: 'dot' },
+        showlegend: false
       },
       {
         x: revenueForecast.forecast?.map(d => d.date) || [],
@@ -174,6 +217,9 @@ export function ForecastsPage({ shopDomain: shopDomainProp }: ForecastsPageProps
     } as Partial<Layout>
   } : null;
 
+  // -----------------------
+  // Orders chart (unchanged, already supports bounds)
+  // -----------------------
   const orderForecastChart = orderForecast ? {
     data: [
       {
@@ -223,7 +269,9 @@ export function ForecastsPage({ shopDomain: shopDomainProp }: ForecastsPageProps
     } as Partial<Layout>
   } : null;
 
-  // Inventory depletion table rows
+  // -----------------------
+  // Inventory rows (UPDATED to handle no_velocity)
+  // -----------------------
   const inventoryRows = inventoryDepletion?.products
     .filter(p => p.days_until_stockout !== null && p.days_until_stockout <= 180)
     .slice(0, 10)
@@ -233,16 +281,24 @@ export function ForecastsPage({ shopDomain: shopDomainProp }: ForecastsPageProps
       product.current_inventory.toString(),
       product.units_sold_30d.toString(),
       product.days_until_stockout ? Math.round(product.days_until_stockout).toString() : 'N/A',
-      <Badge tone={
-        product.risk_level === 'critical' ? 'critical' :
-        product.risk_level === 'high' ? 'warning' :
-        product.risk_level === 'medium' ? 'attention' : 'info'
-      }>
-        {product.risk_level.toUpperCase()}
+      <Badge
+        tone={
+          product.risk_level === 'critical' ? 'critical' :
+          product.risk_level === 'high' ? 'warning' :
+          product.risk_level === 'medium' ? 'attention' :
+          product.risk_level === 'no_velocity' ? 'info' : 'success'
+        }
+      >
+        {product.risk_level.replace('_', ' ').toUpperCase()}
       </Badge>
     ]) || [];
 
-  // Customer CLV table rows
+  const hasVelocityProducts =
+    (inventoryDepletion?.products || []).some(p => (p.daily_velocity || 0) > 0);
+
+  // -----------------------
+  // CLV rows (unchanged — backend adds fields but compatible)
+  // -----------------------
   const clvRows = customerCLV?.customers.slice(0, 10).map(customer => [
     customer.name,
     customer.email,
@@ -316,6 +372,7 @@ export function ForecastsPage({ shopDomain: shopDomainProp }: ForecastsPageProps
                           style={{ width: '100%', height: '400px' }}
                         />
                       )}
+
                       <InlineGrid columns={5} gap="400">
                         <Card>
                           <BlockStack gap="200">
@@ -325,6 +382,7 @@ export function ForecastsPage({ shopDomain: shopDomainProp }: ForecastsPageProps
                             </Text>
                           </BlockStack>
                         </Card>
+
                         <Card>
                           <BlockStack gap="200">
                             <Text as="p" variant="bodyMd" tone="subdued">Daily Trend</Text>
@@ -333,6 +391,7 @@ export function ForecastsPage({ shopDomain: shopDomainProp }: ForecastsPageProps
                             </Text>
                           </BlockStack>
                         </Card>
+
                         <Card>
                           <BlockStack gap="200">
                             <Text as="p" variant="bodyMd" tone="subdued">Historical Total (30d)</Text>
@@ -341,6 +400,7 @@ export function ForecastsPage({ shopDomain: shopDomainProp }: ForecastsPageProps
                             </Text>
                           </BlockStack>
                         </Card>
+
                         <Card>
                           <BlockStack gap="200">
                             <Text as="p" variant="bodyMd" tone="subdued">Forecast Total</Text>
@@ -349,6 +409,7 @@ export function ForecastsPage({ shopDomain: shopDomainProp }: ForecastsPageProps
                             </Text>
                           </BlockStack>
                         </Card>
+
                         <Card>
                           <BlockStack gap="200">
                             <Text as="p" variant="bodyMd" tone="subdued">Combined Total</Text>
@@ -426,7 +487,8 @@ export function ForecastsPage({ shopDomain: shopDomainProp }: ForecastsPageProps
                   <Card>
                     <BlockStack gap="400">
                       <Text as="h2" variant="headingMd">Inventory Depletion Alerts</Text>
-                      {inventoryDepletion.products.length === 0 ? (
+
+                      {!hasVelocityProducts ? (
                         <Banner tone="info">
                           <Text as="p">No products with recent sales activity</Text>
                         </Banner>
@@ -443,6 +505,7 @@ export function ForecastsPage({ shopDomain: shopDomainProp }: ForecastsPageProps
                               </Text>
                             </Banner>
                           )}
+
                           <DataTable
                             columnContentTypes={['text', 'text', 'numeric', 'numeric', 'numeric', 'text']}
                             headings={['Product', 'Variant', 'Stock', '30d Sales', 'Days Left', 'Risk']}
@@ -485,6 +548,7 @@ export function ForecastsPage({ shopDomain: shopDomainProp }: ForecastsPageProps
                           </BlockStack>
                         </Card>
                       </InlineGrid>
+
                       <DataTable
                         columnContentTypes={['text', 'text', 'text', 'numeric', 'numeric', 'numeric', 'text']}
                         headings={['Customer', 'Email', 'Segment', 'Orders', 'Total Spent', 'Predicted CLV', 'Churn Risk']}
