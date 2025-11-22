@@ -30,6 +30,7 @@ interface RevenueForecast {
   metrics: {
     avg_daily_revenue: number;
     daily_trend: number;
+    historical_total_30d: number;
     forecast_total: number;
   };
 }
@@ -41,6 +42,7 @@ interface OrderForecast {
     avg_daily_orders: number;
     daily_trend: number;
     std_deviation: number;
+    historical_total_30d: number;
     forecast_total: number;
   };
 }
@@ -223,7 +225,7 @@ export function ForecastsPage({ shopDomain: shopDomainProp }: ForecastsPageProps
 
   // Inventory depletion table rows
   const inventoryRows = inventoryDepletion?.products
-    .filter(p => p.days_until_stockout !== null) // && p.days_until_stockout <= 60
+    .filter(p => p.days_until_stockout !== null && p.days_until_stockout <= 180)
     .slice(0, 10)
     .map(product => [
       product.product_title,
@@ -314,7 +316,7 @@ export function ForecastsPage({ shopDomain: shopDomainProp }: ForecastsPageProps
                           style={{ width: '100%', height: '400px' }}
                         />
                       )}
-                      <InlineGrid columns={3} gap="400">
+                      <InlineGrid columns={5} gap="400">
                         <Card>
                           <BlockStack gap="200">
                             <Text as="p" variant="bodyMd" tone="subdued">Avg Daily Revenue</Text>
@@ -333,9 +335,25 @@ export function ForecastsPage({ shopDomain: shopDomainProp }: ForecastsPageProps
                         </Card>
                         <Card>
                           <BlockStack gap="200">
+                            <Text as="p" variant="bodyMd" tone="subdued">Historical Total (30d)</Text>
+                            <Text as="p" variant="headingLg">
+                              ${revenueForecast.metrics.historical_total_30d.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </Text>
+                          </BlockStack>
+                        </Card>
+                        <Card>
+                          <BlockStack gap="200">
                             <Text as="p" variant="bodyMd" tone="subdued">Forecast Total</Text>
                             <Text as="p" variant="headingLg">
                               ${revenueForecast.metrics.forecast_total.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </Text>
+                          </BlockStack>
+                        </Card>
+                        <Card>
+                          <BlockStack gap="200">
+                            <Text as="p" variant="bodyMd" tone="subdued">Combined Total</Text>
+                            <Text as="p" variant="headingLg" tone="success">
+                              ${(revenueForecast.metrics.historical_total_30d + revenueForecast.metrics.forecast_total).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                             </Text>
                           </BlockStack>
                         </Card>
@@ -357,7 +375,7 @@ export function ForecastsPage({ shopDomain: shopDomainProp }: ForecastsPageProps
                           style={{ width: '100%', height: '400px' }}
                         />
                       )}
-                      <InlineGrid columns={3} gap="400">
+                      <InlineGrid columns={5} gap="400">
                         <Card>
                           <BlockStack gap="200">
                             <Text as="p" variant="bodyMd" tone="subdued">Avg Daily Orders</Text>
@@ -376,9 +394,25 @@ export function ForecastsPage({ shopDomain: shopDomainProp }: ForecastsPageProps
                         </Card>
                         <Card>
                           <BlockStack gap="200">
+                            <Text as="p" variant="bodyMd" tone="subdued">Historical Total (30d)</Text>
+                            <Text as="p" variant="headingLg">
+                              {orderForecast.metrics.historical_total_30d}
+                            </Text>
+                          </BlockStack>
+                        </Card>
+                        <Card>
+                          <BlockStack gap="200">
                             <Text as="p" variant="bodyMd" tone="subdued">Forecast Total</Text>
                             <Text as="p" variant="headingLg">
                               {orderForecast.metrics.forecast_total}
+                            </Text>
+                          </BlockStack>
+                        </Card>
+                        <Card>
+                          <BlockStack gap="200">
+                            <Text as="p" variant="bodyMd" tone="subdued">Combined Total</Text>
+                            <Text as="p" variant="headingLg" tone="success">
+                              {orderForecast.metrics.historical_total_30d + orderForecast.metrics.forecast_total}
                             </Text>
                           </BlockStack>
                         </Card>
@@ -388,22 +422,34 @@ export function ForecastsPage({ shopDomain: shopDomainProp }: ForecastsPageProps
                 )}
 
                 {/* Inventory Depletion Alerts */}
-                {inventoryDepletion && inventoryDepletion.products.length > 0 && (
+                {inventoryDepletion && (
                   <Card>
                     <BlockStack gap="400">
                       <Text as="h2" variant="headingMd">Inventory Depletion Alerts</Text>
-                      {inventoryDepletion.summary.critical_risk > 0 && (
-                        <Banner tone="critical">
-                          <Text as="p">
-                            {inventoryDepletion.summary.critical_risk} product{inventoryDepletion.summary.critical_risk !== 1 ? 's' : ''} at critical risk of stockout within 7 days
-                          </Text>
+                      {inventoryDepletion.products.length === 0 ? (
+                        <Banner tone="info">
+                          <Text as="p">No products with recent sales activity</Text>
                         </Banner>
+                      ) : inventoryRows.length === 0 ? (
+                        <Banner tone="success">
+                          <Text as="p">All products have sufficient inventory (180+ days supply)</Text>
+                        </Banner>
+                      ) : (
+                        <>
+                          {inventoryDepletion.summary.critical_risk > 0 && (
+                            <Banner tone="critical">
+                              <Text as="p">
+                                {inventoryDepletion.summary.critical_risk} product{inventoryDepletion.summary.critical_risk !== 1 ? 's' : ''} at critical risk of stockout within 7 days
+                              </Text>
+                            </Banner>
+                          )}
+                          <DataTable
+                            columnContentTypes={['text', 'text', 'numeric', 'numeric', 'numeric', 'text']}
+                            headings={['Product', 'Variant', 'Stock', '30d Sales', 'Days Left', 'Risk']}
+                            rows={inventoryRows}
+                          />
+                        </>
                       )}
-                      <DataTable
-                        columnContentTypes={['text', 'text', 'numeric', 'numeric', 'numeric', 'text']}
-                        headings={['Product', 'Variant', 'Stock', '30d Sales', 'Days Left', 'Risk']}
-                        rows={inventoryRows}
-                      />
                     </BlockStack>
                   </Card>
                 )}
