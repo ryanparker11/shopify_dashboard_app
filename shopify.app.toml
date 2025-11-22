@@ -13,19 +13,15 @@ dev_store_url = "test-auth-1-2.myshopify.com"
 api_version = "2025-10"
 
   [[webhooks.subscriptions]]
-  topics = ["app/uninstalled"]
-  uri = "https://api.lodestaranalytics.io/webhooks/customers/data_request"
-  compliance_topics = [ "customers/data_request" ]
+  compliance_topics = [
+    "customers/data_request",
+    "customers/redact",
+    "shop/redact"]
+  uri = "https://api.lodestaranalytics.io/webhooks/compliance"
 
-  [[webhooks.subscriptions]]
-  topics = ["app/uninstalled"]
-  uri = "https://api.lodestaranalytics.io/webhooks/customers/redact"
-  compliance_topics = [ "customers/redact" ]
 
-  [[webhooks.subscriptions]]
-  topics = ["app/uninstalled"]
-  uri = "https://api.lodestaranalytics.io/webhooks/shop/redact"
-  compliance_topics = [ "shop/redact" ]
+  
+
 
   [[webhooks.subscriptions]]
   topics = [
