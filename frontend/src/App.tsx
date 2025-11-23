@@ -20,6 +20,7 @@ import './lib/api';
 
 import { COGSManagement } from './components/COGSManagement';
 import { ForecastsPage } from './components/ForecastsPage';
+import { AttributionPage } from './components/AttributionPage';
 import { useEffect, useRef, useState, useCallback } from 'react';
 import type { ReactNode} from 'react';
 import Plot from 'react-plotly.js';
@@ -860,6 +861,11 @@ const downloadChart = async (chart: ChartData) => {
     return renderCustomerLeaderboard();
   };
 
+  const renderAttributionTab = () => {
+    if (!shop) return null;
+    return <AttributionPage shopDomain={shop} />;
+  };
+
   // --------------------------------------------------------------------
   // Main return
   // --------------------------------------------------------------------
@@ -884,6 +890,11 @@ const downloadChart = async (chart: ChartData) => {
       id: 'customers',
       content: 'Customers',
       panelID: 'customers-panel',
+    },
+    {
+      id: 'attribution',
+      content: 'Attribution',
+      panelID: 'attribution-panel',
     },
   ];
 
@@ -912,6 +923,7 @@ const downloadChart = async (chart: ChartData) => {
                   {selectedTab === 1 && renderCOGSTab()}
                   {selectedTab === 2 && renderForecastsTab()}
                   {selectedTab === 3 && renderCustomersTab()}
+                  {selectedTab === 4 && renderAttributionTab()}
                 </div>
               </Tabs>
             </div>
