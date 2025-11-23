@@ -151,6 +151,23 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
               id 
               email 
             }
+            customerJourneySummary {
+                firstVisit{
+                    landingPage
+                    landingPageHtml
+                    referrerURL
+                    source
+                    sourceType
+                    sourceDescription
+                    utmParameters {
+                        campaign
+                        content
+                        medium
+                        source
+                        term
+                    }
+                }
+            }
             lineItems {
               edges {
                 node {
@@ -334,6 +351,37 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
                         item_id = item.get("id", "")
                         if "/Order/" not in item_id:
                             continue  # Skip LineItem, Customer, etc.
+
+                        # Extract attribution data from customerJourneySummary
+                        journey = item.get("customerJourneySummary", {})
+                        first_visit = journey.get("firstVisit", {}) if journey else {}
+                        utm_params = first_visit.get("utmParameters", {}) if first_visit else {}
+                        
+                        # Build landing_site URL with UTM parameters
+                        landing_page = first_visit.get("landingPage", "") if first_visit else None
+                        landing_site = None
+                        
+                        if landing_page and utm_params:
+                            # Reconstruct landing_site with UTM parameters
+                            utm_parts = []
+                            if utm_params.get("source"):
+                                utm_parts.append(f"utm_source={utm_params['source']}")
+                            if utm_params.get("medium"):
+                                utm_parts.append(f"utm_medium={utm_params['medium']}")
+                            if utm_params.get("campaign"):
+                                utm_parts.append(f"utm_campaign={utm_params['campaign']}")
+                            if utm_params.get("content"):
+                                utm_parts.append(f"utm_content={utm_params['content']}")
+                            if utm_params.get("term"):
+                                utm_parts.append(f"utm_term={utm_params['term']}")
+                            
+                            if utm_parts:
+                                separator = "?" if "?" not in landing_page else "&"
+                                landing_site = f"{landing_page}{separator}{'&'.join(utm_parts)}"
+                            else:
+                                landing_site = landing_page
+                        elif landing_page:
+                            landing_site = landing_page
                         
                         # Convert GraphQL format to REST format for process_order_webhook
                         rest_format_order = {
