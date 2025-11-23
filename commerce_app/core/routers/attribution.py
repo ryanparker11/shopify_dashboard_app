@@ -25,13 +25,17 @@ def get_shop_from_session(session: Dict[str, Any]) -> str:
     # Extract from 'dest' field (standard Shopify session token format)
     dest = session.get("dest", "")
     if dest:
-        return dest
+        # Remove https:// prefix to match database format
+        shop_domain = dest.replace("https://", "").replace("http://", "")
+        # Also remove any trailing paths like /admin
+        shop_domain = shop_domain.split("/")[0]
+        return shop_domain
     
     # Fallback: extract from 'iss' field (format: https://store.myshopify.com/admin)
     iss = session.get("iss", "")
     if iss:
         # Remove https:// and /admin
-        shop = iss.replace("https://", "").replace("/admin", "")
+        shop = iss.replace("https://", "").replace("/admin", "").split("/")[0]
         return shop
     
     raise HTTPException(
