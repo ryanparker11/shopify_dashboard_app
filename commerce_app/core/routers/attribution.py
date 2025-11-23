@@ -1,4 +1,5 @@
 # commerce_app/core/routers/attribution.py
+# FIXED VERSION - SQL injection vulnerabilities removed
 from fastapi import APIRouter, HTTPException, Query, Depends
 from commerce_app.core.db import get_conn
 from commerce_app.auth.session_tokens import verify_shopify_session_token
@@ -220,7 +221,7 @@ async def attribution_overview(
             shop_id = shop_row[0]
             
             # Get orders with attribution data
-            # Extract landing_site, source_name, referring_site from root level of raw_json
+            # FIXED: Use make_interval instead of string formatting
             await cur.execute(
                 """
                 SELECT 
@@ -235,7 +236,7 @@ async def attribution_overview(
                 FROM shopify.orders o
                 LEFT JOIN shopify.customers c ON o.shop_id = c.shop_id AND o.customer_id = c.customer_id
                 WHERE o.shop_id = %s
-                  AND o.created_at >= NOW() - INTERVAL '%s days'
+                  AND o.created_at >= NOW() - make_interval(days => %s)
                   AND o.financial_status IN ('paid', 'partially_paid')
                 ORDER BY o.created_at DESC
                 """,
@@ -333,6 +334,7 @@ async def attribution_campaigns(
             shop_id = shop_row[0]
             
             # Get orders with attribution data
+            # FIXED: Use make_interval
             await cur.execute(
                 """
                 SELECT 
@@ -343,7 +345,7 @@ async def attribution_campaigns(
                     (o.raw_json->>'source_name')::text as source_name
                 FROM shopify.orders o
                 WHERE o.shop_id = %s
-                  AND o.created_at >= NOW() - INTERVAL '%s days'
+                  AND o.created_at >= NOW() - make_interval(days => %s)
                   AND o.financial_status IN ('paid', 'partially_paid')
                 ORDER BY o.created_at DESC
                 """,
@@ -436,8 +438,9 @@ async def attribution_trend(
             date_trunc = "day" if group_by == "day" else "week"
             
             # Get orders with attribution data grouped by date
+            # FIXED: Use make_interval
             await cur.execute(
-                f"""
+                """
                 SELECT 
                     DATE_TRUNC(%s, o.created_at) as period,
                     (o.raw_json->>'landing_site')::text as landing_site,
@@ -447,7 +450,7 @@ async def attribution_trend(
                     SUM(o.total_price) as revenue
                 FROM shopify.orders o
                 WHERE o.shop_id = %s
-                  AND o.created_at >= NOW() - INTERVAL '%s days'
+                  AND o.created_at >= NOW() - make_interval(days => %s)
                   AND o.financial_status IN ('paid', 'partially_paid')
                 GROUP BY period, landing_site, source_name, referring_site
                 ORDER BY period ASC
@@ -536,6 +539,7 @@ async def attribution_customer_split(
             shop_id = shop_row[0]
             
             # Get orders with customer data
+            # FIXED: Use make_interval
             await cur.execute(
                 """
                 SELECT 
@@ -547,7 +551,7 @@ async def attribution_customer_split(
                 FROM shopify.orders o
                 LEFT JOIN shopify.customers c ON o.shop_id = c.shop_id AND o.customer_id = c.customer_id
                 WHERE o.shop_id = %s
-                  AND o.created_at >= NOW() - INTERVAL '%s days'
+                  AND o.created_at >= NOW() - make_interval(days => %s)
                   AND o.financial_status IN ('paid', 'partially_paid')
                 """,
                 (shop_id, days)
