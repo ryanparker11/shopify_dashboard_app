@@ -9,6 +9,7 @@ pydantic~=2.8
 psycopg2-binary==2.9.9
 openpyxl
 pandas
+numpy
 xlsxwriter
 python-multipart
 pyjwt
