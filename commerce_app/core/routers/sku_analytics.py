@@ -71,25 +71,24 @@ async def sku_overview(
                 SELECT 
                     oli.product_id,
                     oli.variant_id,
-                    oli.sku,
-                    oli.name as line_item_name,
-                    oli.variant_title,
+                    pv.sku,
+                    p.title as line_item_name,
+                    pv.title as variant_title,
                     oli.quantity,
                     oli.price,
                     p.title as product_title,
-                    c.cogs_per_unit,
-                    o.created_at
+                    pv.cost as cogs_per_unit,
+                    o.order_date
                 FROM shopify.order_line_items oli
                 INNER JOIN shopify.orders o ON oli.shop_id = o.shop_id AND oli.order_id = o.order_id
                 LEFT JOIN shopify.products p ON oli.shop_id = p.shop_id AND oli.product_id = p.product_id
-                LEFT JOIN shopify.cogs c ON oli.shop_id = c.shop_id 
-                    AND oli.product_id = c.product_id 
-                    AND (oli.variant_id = c.variant_id OR (oli.variant_id IS NULL AND c.variant_id IS NULL))
+                LEFT JOIN shopify.product_variants pv ON oli.shop_id = pv.shop_id 
+                    AND oli.product_id = pv.product_id 
+                    AND oli.variant_id = pv.variant_id
                 WHERE oli.shop_id = %s
-                  AND o.created_at >= NOW() - make_interval(days => %s)
+                  AND o.order_date >= CURRENT_DATE - %s
                   AND o.financial_status IN ('paid', 'partially_paid')
-                  AND o.cancelled_at IS NULL
-                ORDER BY o.created_at DESC
+                ORDER BY o.order_date DESC
                 """,
                 (shop_id, days)
             )
@@ -256,18 +255,17 @@ async def sku_trend(
                     COALESCE(oli.variant_id::text, 'p_' || oli.product_id::text) as sku_key,
                     oli.product_id,
                     oli.variant_id,
-                    oli.sku,
+                    pv.sku,
                     MAX(p.title) as product_title,
-                    MAX(oli.variant_title) as variant_title,
+                    MAX(pv.title as variant_title) as variant_title,
                     SUM(oli.quantity * oli.price) as total_revenue
                 FROM shopify.order_line_items oli
                 INNER JOIN shopify.orders o ON oli.shop_id = o.shop_id AND oli.order_id = o.order_id
                 LEFT JOIN shopify.products p ON oli.shop_id = p.shop_id AND oli.product_id = p.product_id
                 WHERE oli.shop_id = %s
-                  AND o.created_at >= NOW() - make_interval(days => %s)
+                  AND o.order_date >= CURRENT_DATE - %s
                   AND o.financial_status IN ('paid', 'partially_paid')
-                  AND o.cancelled_at IS NULL
-                GROUP BY sku_key, oli.product_id, oli.variant_id, oli.sku
+                GROUP BY sku_key, oli.product_id, oli.variant_id, pv.sku
                 ORDER BY total_revenue DESC
                 LIMIT %s
                 """,
@@ -297,22 +295,21 @@ async def sku_trend(
             await cur.execute(
                 """
                 SELECT 
-                    DATE_TRUNC(%s, o.created_at) as period,
+                    DATE_TRUNC(%s, o.order_date) as period,
                     oli.product_id,
                     oli.variant_id,
-                    oli.sku,
+                    pv.sku,
                     MAX(p.title) as product_title,
-                    MAX(oli.variant_title) as variant_title,
+                    MAX(pv.title as variant_title) as variant_title,
                     SUM(oli.quantity) as quantity,
                     SUM(oli.quantity * oli.price) as revenue
                 FROM shopify.order_line_items oli
                 INNER JOIN shopify.orders o ON oli.shop_id = o.shop_id AND oli.order_id = o.order_id
                 LEFT JOIN shopify.products p ON oli.shop_id = p.shop_id AND oli.product_id = p.product_id
                 WHERE oli.shop_id = %s
-                  AND o.created_at >= NOW() - make_interval(days => %s)
+                  AND o.order_date >= CURRENT_DATE - %s
                   AND o.financial_status IN ('paid', 'partially_paid')
-                  AND o.cancelled_at IS NULL
-                GROUP BY period, oli.product_id, oli.variant_id, oli.sku
+                GROUP BY period, oli.product_id, oli.variant_id, pv.sku
                 ORDER BY period ASC
                 """,
                 (date_trunc, shop_id, days)
@@ -433,24 +430,23 @@ async def sku_profit_leaders(
                 SELECT 
                     oli.product_id,
                     oli.variant_id,
-                    oli.sku,
+                    pv.sku,
                     MAX(p.title) as product_title,
-                    MAX(oli.variant_title) as variant_title,
+                    MAX(pv.title as variant_title) as variant_title,
                     SUM(oli.quantity) as total_quantity,
                     SUM(oli.quantity * oli.price) as total_revenue,
-                    SUM(oli.quantity * c.cogs_per_unit) as total_cost,
-                    MAX(c.cogs_per_unit) as cogs_per_unit
+                    SUM(oli.quantity * pv.cost) as total_cost,
+                    MAX(pv.cost) as cogs_per_unit
                 FROM shopify.order_line_items oli
                 INNER JOIN shopify.orders o ON oli.shop_id = o.shop_id AND oli.order_id = o.order_id
-                INNER JOIN shopify.cogs c ON oli.shop_id = c.shop_id 
-                    AND oli.product_id = c.product_id 
-                    AND (oli.variant_id = c.variant_id OR (oli.variant_id IS NULL AND c.variant_id IS NULL))
+                INNER JOIN shopify.product_variants pv ON oli.shop_id = pv.shop_id 
+                    AND oli.product_id = pv.product_id 
+                    AND oli.variant_id = pv.variant_id
                 LEFT JOIN shopify.products p ON oli.shop_id = p.shop_id AND oli.product_id = p.product_id
                 WHERE oli.shop_id = %s
-                  AND o.created_at >= NOW() - make_interval(days => %s)
+                  AND o.order_date >= CURRENT_DATE - %s
                   AND o.financial_status IN ('paid', 'partially_paid')
-                  AND o.cancelled_at IS NULL
-                GROUP BY oli.product_id, oli.variant_id, oli.sku
+                GROUP BY oli.product_id, oli.variant_id, pv.sku
                 HAVING SUM(oli.quantity * oli.price) > 0
                 """,
                 (shop_id, days)
@@ -549,25 +545,24 @@ async def export_sku_analytics(
                 SELECT 
                     oli.product_id,
                     oli.variant_id,
-                    oli.sku,
-                    oli.name as line_item_name,
-                    oli.variant_title,
+                    pv.sku,
+                    p.title as line_item_name,
+                    pv.title as variant_title,
                     oli.quantity,
                     oli.price,
                     p.title as product_title,
-                    c.cogs_per_unit,
-                    o.created_at
+                    pv.cost as cogs_per_unit,
+                    o.order_date
                 FROM shopify.order_line_items oli
                 INNER JOIN shopify.orders o ON oli.shop_id = o.shop_id AND oli.order_id = o.order_id
                 LEFT JOIN shopify.products p ON oli.shop_id = p.shop_id AND oli.product_id = p.product_id
-                LEFT JOIN shopify.cogs c ON oli.shop_id = c.shop_id 
-                    AND oli.product_id = c.product_id 
-                    AND (oli.variant_id = c.variant_id OR (oli.variant_id IS NULL AND c.variant_id IS NULL))
+                LEFT JOIN shopify.product_variants pv ON oli.shop_id = pv.shop_id 
+                    AND oli.product_id = pv.product_id 
+                    AND oli.variant_id = pv.variant_id
                 WHERE oli.shop_id = %s
-                  AND o.created_at >= NOW() - make_interval(days => %s)
+                  AND o.order_date >= CURRENT_DATE - %s
                   AND o.financial_status IN ('paid', 'partially_paid')
-                  AND o.cancelled_at IS NULL
-                ORDER BY o.created_at DESC
+                ORDER BY o.order_date DESC
                 """,
                 (shop_id, days)
             )
