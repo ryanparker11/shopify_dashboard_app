@@ -21,7 +21,7 @@ import './lib/api';
 import { COGSManagement } from './components/COGSManagement';
 import { ForecastsPage } from './components/ForecastsPage';
 import { AttributionPage } from './components/AttributionPage';
-import { SKUAnalyticsPage } from './components/SKUAnalyticsPage';
+import { SKUAnalyticsPage } from './components/SkuAnalyticsPage';
 import { WhatIfScenariosPage } from './components/WhatIfScenariosPage';
 import { useEffect, useRef, useState, useCallback } from 'react';
 import type { ReactNode} from 'react';
