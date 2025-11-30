@@ -21,7 +21,8 @@ import './lib/api';
 import { COGSManagement } from './components/COGSManagement';
 import { ForecastsPage } from './components/ForecastsPage';
 import { AttributionPage } from './components/AttributionPage';
-import { SKUAnalyticsPage } from './components/SkuAnalyticsPage';
+import { SKUAnalyticsPage } from './components/SKUAnalyticsPage';
+import { WhatIfScenariosPage } from './components/WhatIfScenariosPage';
 import { useEffect, useRef, useState, useCallback } from 'react';
 import type { ReactNode} from 'react';
 import Plot from 'react-plotly.js';
@@ -871,6 +872,10 @@ const downloadChart = async (chart: ChartData) => {
     return <SKUAnalyticsPage />;
   };
 
+  const renderWhatIfTab = () => {
+    return <WhatIfScenariosPage />;
+  };
+
   // --------------------------------------------------------------------
   // Main return
   // --------------------------------------------------------------------
@@ -885,6 +890,11 @@ const downloadChart = async (chart: ChartData) => {
       id: 'sku',
       content: 'SKU Analytics',
       panelID: 'sku-panel',
+    },
+    {
+      id: 'what-if',
+      content: 'What If',
+      panelID: 'what-if-panel',
     },
     {
       id: 'cogs',
@@ -931,10 +941,11 @@ const downloadChart = async (chart: ChartData) => {
                 <div style={{ marginTop: '20px' }}>
                   {selectedTab === 0 && renderAnalyticsTab()}
                   {selectedTab === 1 && renderSKUAnalyticsTab()}
-                  {selectedTab === 2 && renderCOGSTab()}
-                  {selectedTab === 3 && renderForecastsTab()}
-                  {selectedTab === 4 && renderCustomersTab()}
-                  {selectedTab === 5 && renderAttributionTab()}
+                  {selectedTab === 2 && renderWhatIfTab()}
+                  {selectedTab === 3 && renderCOGSTab()}
+                  {selectedTab === 4 && renderForecastsTab()}
+                  {selectedTab === 5 && renderCustomersTab()}
+                  {selectedTab === 6 && renderAttributionTab()}
                 </div>
               </Tabs>
             </div>
