@@ -17,6 +17,7 @@ from commerce_app.core.routers import cogs
 from commerce_app.core.routers.gdpr_webhooks import router as gdpr_router
 from commerce_app.core.routers.Forecasts import router as forecasts_router
 from commerce_app.core.routers import attribution
+from commerce_app.core.routers import sku_analytics
 
 # Session token verifier
 from commerce_app.auth.session_tokens import verify_shopify_session_token
@@ -90,6 +91,12 @@ app.include_router(
     dependencies=[Depends(verify_shopify_session_token)]
 )
 
+app.include_router(
+    sku_analytics.router,
+    prefix="/api",
+    tags=["SKU Analytics"],
+    dependencies=[Depends(verify_shopify_session_token)]
+)
 # ❗ Do NOT protect webhooks with session tokens (they use HMAC headers)
 app.include_router(webhooks.router, prefix="/webhooks", tags=["webhooks"])
 app.include_router(gdpr_router, prefix="/webhooks", tags=["gdpr"])
