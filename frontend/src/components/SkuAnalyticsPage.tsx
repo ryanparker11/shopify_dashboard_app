@@ -201,17 +201,18 @@ export function SKUAnalyticsPage() {
       );
     }
 
-    if (!skuData || skuData.skus.length === 0) {
+    if (!skuData) {
       return (
         <Card>
-          <Text as="p" tone="subdued">
-            No SKU data available for the selected period.
+          <Text as="p" tone="critical">
+            Failed to load SKU data. Please try again.
           </Text>
         </Card>
       );
     }
 
     const sortedSKUs = getSortedSKUs();
+    const hasData = sortedSKUs.length > 0;
 
     const headings = [
       'Product / SKU',
@@ -225,7 +226,7 @@ export function SKUAnalyticsPage() {
       'Last Order',
     ];
 
-    const rows = sortedSKUs.map((sku) => {
+    const rows = hasData ? sortedSKUs.map((sku) => {
       // Build product name display
       let productDisplay = sku.product_title;
       if (sku.variant_title) {
@@ -302,7 +303,7 @@ export function SKUAnalyticsPage() {
             })
           : 'Never',
       ];
-    });
+    }) : [];
 
     return (
       <Card>
@@ -313,10 +314,15 @@ export function SKUAnalyticsPage() {
                 SKU Performance
               </Text>
               <Text as="p" variant="bodySm" tone="subdued">
-                Showing {sortedSKUs.length} of {skuData.summary.total_skus} total SKUs
+                {hasData 
+                  ? `Showing ${sortedSKUs.length} of ${skuData.summary.total_skus} total SKUs`
+                  : 'No SKU data for the selected period'
+                }
               </Text>
             </div>
-            <Button onClick={downloadSKUData}>Download Excel</Button>
+            <Button onClick={downloadSKUData} disabled={!hasData}>
+              Download Excel
+            </Button>
           </InlineStack>
 
           {/* Summary Cards */}
@@ -419,26 +425,39 @@ export function SKUAnalyticsPage() {
             </div>
           </InlineStack>
 
-          {/* Data Table */}
-          <DataTable
-            columnContentTypes={[
-              'text',
-              'numeric',
-              'numeric',
-              'numeric',
-              'numeric',
-              'numeric',
-              'numeric',
-              'numeric',
-              'text',
-            ]}
-            headings={headings}
-            rows={rows}
-            sortable={[true, true, true, true, true, true, true, true, true]}
-            defaultSortDirection="descending"
-            initialSortColumnIndex={2}
-            onSort={handleSort}
-          />
+          {/* Empty State or Data Table */}
+          {!hasData ? (
+            <Card>
+              <div style={{ padding: '60px 20px', textAlign: 'center' }}>
+                <Text as="p" variant="bodyLg" tone="subdued">
+                  No orders found in the selected time period
+                </Text>
+                <Text as="p" variant="bodySm" tone="subdued">
+                  Try selecting a longer time period or check back later
+                </Text>
+              </div>
+            </Card>
+          ) : (
+            <DataTable
+              columnContentTypes={[
+                'text',
+                'numeric',
+                'numeric',
+                'numeric',
+                'numeric',
+                'numeric',
+                'numeric',
+                'numeric',
+                'text',
+              ]}
+              headings={headings}
+              rows={rows}
+              sortable={[true, true, true, true, true, true, true, true, true]}
+              defaultSortDirection="descending"
+              initialSortColumnIndex={2}
+              onSort={handleSort}
+            />
+          )}
         </BlockStack>
       </Card>
     );
