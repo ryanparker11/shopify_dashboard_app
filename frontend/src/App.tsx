@@ -21,6 +21,7 @@ import './lib/api';
 import { COGSManagement } from './components/COGSManagement';
 import { ForecastsPage } from './components/ForecastsPage';
 import { AttributionPage } from './components/AttributionPage';
+import { SKUAnalyticsPage } from './components/SkuAnalyticsPage';
 import { useEffect, useRef, useState, useCallback } from 'react';
 import type { ReactNode} from 'react';
 import Plot from 'react-plotly.js';
@@ -866,6 +867,10 @@ const downloadChart = async (chart: ChartData) => {
     return <AttributionPage shopDomain={shop} />;
   };
 
+  const renderSKUAnalyticsTab = () => {
+    return <SKUAnalyticsPage />;
+  };
+
   // --------------------------------------------------------------------
   // Main return
   // --------------------------------------------------------------------
@@ -875,6 +880,11 @@ const downloadChart = async (chart: ChartData) => {
       id: 'analytics',
       content: 'Analytics',
       panelID: 'analytics-panel',
+    },
+    {
+      id: 'sku',
+      content: 'SKU Analytics',
+      panelID: 'sku-panel',
     },
     {
       id: 'cogs',
@@ -920,10 +930,11 @@ const downloadChart = async (chart: ChartData) => {
               <Tabs tabs={tabs} selected={selectedTab} onSelect={handleTabChange}>
                 <div style={{ marginTop: '20px' }}>
                   {selectedTab === 0 && renderAnalyticsTab()}
-                  {selectedTab === 1 && renderCOGSTab()}
-                  {selectedTab === 2 && renderForecastsTab()}
-                  {selectedTab === 3 && renderCustomersTab()}
-                  {selectedTab === 4 && renderAttributionTab()}
+                  {selectedTab === 1 && renderSKUAnalyticsTab()}
+                  {selectedTab === 2 && renderCOGSTab()}
+                  {selectedTab === 3 && renderForecastsTab()}
+                  {selectedTab === 4 && renderCustomersTab()}
+                  {selectedTab === 5 && renderAttributionTab()}
                 </div>
               </Tabs>
             </div>
