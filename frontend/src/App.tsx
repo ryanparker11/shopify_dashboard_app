@@ -24,7 +24,7 @@ import { AttributionPage } from './components/AttributionPage';
 import { SKUAnalyticsPage } from './components/SkuAnalyticsPage';
 import { WhatIfScenariosPage } from './components/WhatIfScenariosPage';
 import { useEffect, useRef, useState, useCallback } from 'react';
-import type { ReactNode} from 'react';
+import type { ReactNode } from 'react';
 import Plot from 'react-plotly.js';
 import { authenticatedFetch, authenticatedBlobFetch } from './lib/api';
 
@@ -35,6 +35,32 @@ declare global {
   }
 }
 
+// ---------- New Types for Insights / Alerts / Comparison ---------- //
+
+interface TrendDelta {
+  current: number;
+  previous: number;
+  delta_amount: number;
+  delta_percent: number | null;
+  direction: string;
+}
+
+interface ChartAlert {
+  level: 'warning' | 'positive' | 'info' | string;
+  metric: string;
+  message: string;
+}
+
+interface ChartComparisonWindow {
+  label?: string;
+  x: string[];
+  y: number[];
+}
+
+interface ChartComparison {
+  previous_30d?: ChartComparisonWindow;
+}
+
 interface SyncStatus {
   status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'not_found';
   orders_synced: number;
@@ -42,15 +68,73 @@ interface SyncStatus {
   error: string | null;
 }
 
+
+interface ChartSummary {
+  current_month?: string;
+  previous_month?: string;
+  delta?: TrendDelta;
+  current_revenue?: number;
+  previous_revenue?: number;
+
+  // daily orders / revenue summaries
+  total_orders_30d?: number;
+  total_orders_prev_30d?: number;
+  delta_30d?: TrendDelta;
+  delta_7d?: TrendDelta;
+
+  revenue_30d?: number;
+  revenue_prev_30d?: number;
+
+  // top products / customers
+  total_top_revenue?: number;
+  top_product?: {
+    name: string;
+    revenue: number;
+    share_percent: number;
+  };
+  top_customer?: {
+    name: string;
+    revenue: number;
+    share_percent: number;
+  };
+
+  // generic formatted fields for labels
+  formatted?: Record<string, string | null>;
+}
+
+
+
 interface ChartData {
   key?: string;
   data: Plotly.Data[];
   layout: Partial<Plotly.Layout & { title?: string | { text?: string } }>;
   export_url?: string;
+
+  // NEW: narrative + summary + alerts + comparison
+  insights?: string[];
+  alerts?: ChartAlert[];
+  summary?: ChartSummary | null;
+  comparison?: ChartComparison;
 }
 
 interface OrdersSummary {
   total_orders: number;
+  total_revenue?: number;
+  avg_order_value?: number;
+  formatted?: {
+    total_revenue: string;
+    avg_order_value: string;
+    orders_30d?: string;
+    orders_prev_30d?: string;
+    revenue_30d?: string;
+    revenue_prev_30d?: string;
+  };
+  trend?: {
+    revenue_30d?: TrendDelta;
+    orders_30d?: TrendDelta;
+  };
+  insights?: string[];
+  alerts?: ChartAlert[];
 }
 
 interface ChartsResponse {
@@ -68,6 +152,11 @@ interface Customer {
   last_order_date: string | null;
   profit_data_status: 'unavailable' | 'complete' | 'partial';
   profit_coverage: string | null;
+  formatted?: {
+    total_revenue?: string;
+    total_profit?: string | null;
+    avg_order_value?: string;
+  };
 }
 
 interface CustomerLeaderboardResponse {
@@ -79,6 +168,13 @@ interface CustomerLeaderboardResponse {
     profit_data_available: boolean;
     avg_revenue_per_customer: number;
     avg_profit_per_customer?: number | null;
+    formatted?: {
+      total_revenue?: string;
+      total_profit?: string | null;
+      avg_revenue_per_customer?: string;
+      avg_profit_per_customer?: string | null;
+    };
+    insights?: string[];
   };
 }
 
@@ -178,19 +274,28 @@ function AppContent() {
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [chartData, setChartData] = useState<ChartData[]>([]);
-  const [totalOrders, setTotalOrders] = useState<number | null>(null);
+  const [ordersSummary, setOrdersSummary] = useState<OrdersSummary | null>(
+    null
+  );
   const [shop, setShop] = useState<string | null>(null);
 
   const [showBanner, setShowBanner] = useState(false);
   const prevStatusRef = useRef<SyncStatus['status'] | null>(null);
 
   // Customer leaderboard state
-  const [customerData, setCustomerData] = useState<CustomerLeaderboardResponse | null>(null);
+  const [customerData, setCustomerData] =
+    useState<CustomerLeaderboardResponse | null>(null);
   const [sortedColumn, setSortedColumn] = useState<number | null>(null);
-  const [sortDirection, setSortDirection] = useState<SortDirection>('descending');
+  const [sortDirection, setSortDirection] =
+    useState<SortDirection>('descending');
 
   // Tab navigation state
   const [selectedTab, setSelectedTab] = useState(0);
+
+  // NEW: comparison visibility per chart key
+  const [comparisonVisibility, setComparisonVisibility] = useState<
+    Record<string, boolean>
+  >({});
 
   const API_URL =
     import.meta.env.VITE_API_URL || 'https://api.lodestaranalytics.io';
@@ -204,7 +309,7 @@ function AppContent() {
       const data = await authenticatedFetch<OrdersSummary>(
         `/api/orders/summary`
       );
-      setTotalOrders(data.total_orders ?? null);
+      setOrdersSummary(data);
     } catch (e) {
       console.error('Failed to fetch orders summary:', e);
     }
@@ -218,7 +323,11 @@ function AppContent() {
         `/api/customers/leaderboard?limit=50`
       );
 
-      console.log('✅ Customer leaderboard loaded successfully:', data.customers?.length || 0, 'customers');
+      console.log(
+        '✅ Customer leaderboard loaded successfully:',
+        data.customers?.length || 0,
+        'customers'
+      );
       setCustomerData(data);
     } catch (error) {
       console.error('💥 Failed to fetch customer leaderboard:', error);
@@ -230,9 +339,7 @@ function AppContent() {
     try {
       console.log('🔍 Fetching charts');
 
-      const data = await authenticatedFetch<ChartsResponse>(
-        `/api/charts`
-      );
+      const data = await authenticatedFetch<ChartsResponse>(`/api/charts`);
 
       console.log(
         '✅ Charts loaded successfully:',
@@ -255,85 +362,101 @@ function AppContent() {
   const resolveExportUrl = (exportUrl?: string) => {
     if (!exportUrl) return null;
 
-    // If it already starts with /analytics/, keep it as is
-
     if (exportUrl.startsWith('/charts')) return `/api${exportUrl}`;
-
     if (exportUrl.startsWith('/api/')) return exportUrl;
-
     if (exportUrl.startsWith('http')) return exportUrl;
 
     return `/api/${exportUrl.replace(/^\/+/, '')}`;
   };
 
-const downloadChart = async (chart: ChartData) => {
-  try {
-    const url = resolveExportUrl(chart.export_url);
-    if (!url) {
-      console.error('No export URL for chart:', chart);
-      return;
+  const downloadChart = async (chart: ChartData) => {
+    try {
+      const url = resolveExportUrl(chart.export_url);
+      if (!url) {
+        console.error('No export URL for chart:', chart);
+        return;
+      }
+
+      console.log('Attempting to download from:', url);
+
+      const blob = await authenticatedBlobFetch(url);
+      console.log('Blob created, size:', blob.size, 'type:', blob.type);
+
+      const filename = `${chart.key || 'chart'}_${new Date()
+        .toISOString()
+        .slice(0, 10)}.xlsx`.replace(/\s+/g, '_');
+
+      const objectUrl = window.URL.createObjectURL(blob);
+
+      const a = document.createElement('a');
+      a.href = objectUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+
+      window.URL.revokeObjectURL(objectUrl);
+
+      console.log('Download completed successfully');
+    } catch (err) {
+      console.error('Download error:', err);
+      alert(
+        `Failed to download chart data: ${
+          err instanceof Error ? err.message : 'Unknown error'
+        }`
+      );
     }
-
-    console.log('Attempting to download from:', url);
-
-    const blob = await authenticatedBlobFetch(url);
-    console.log('Blob created, size:', blob.size, 'type:', blob.type);
-
-    const filename = `${chart.key || 'chart'}_${new Date()
-      .toISOString()
-      .slice(0, 10)}.xlsx`.replace(/\s+/g, '_');
-
-    const objectUrl = window.URL.createObjectURL(blob);
-
-    const a = document.createElement('a');
-    a.href = objectUrl;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-
-    window.URL.revokeObjectURL(objectUrl);
-
-    console.log('Download completed successfully');
-  } catch (err) {
-    console.error('Download error:', err);
-    alert(
-      `Failed to download chart data: ${
-        err instanceof Error ? err.message : 'Unknown error'
-      }`
-    );
-  }
-};
+  };
 
   const downloadCustomerLeaderboard = async () => {
-  try {
-    const url = `/api/charts/export/top_customers`;
-    console.log('Attempting to download customer leaderboard from:', url);
+    try {
+      const url = `/api/charts/export/top_customers`;
+      console.log(
+        'Attempting to download customer leaderboard from:',
+        url
+      );
 
-    const blob = await authenticatedBlobFetch(url);
-    console.log('Blob created, size:', blob.size, 'type:', blob.type);
+      const blob = await authenticatedBlobFetch(url);
+      console.log('Blob created, size:', blob.size, 'type:', blob.type);
 
-    const filename = `customer_leaderboard_${new Date().toISOString().slice(0, 10)}.xlsx`;
+      const filename = `customer_leaderboard_${new Date()
+        .toISOString()
+        .slice(0, 10)}.xlsx`;
 
-    const objectUrl = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = objectUrl;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    window.URL.revokeObjectURL(objectUrl);
+      const objectUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = objectUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(objectUrl);
 
-    console.log('Customer leaderboard download completed successfully');
-  } catch (err) {
-    console.error('Download error:', err);
-    alert(
-      `Failed to download customer leaderboard: ${
-        err instanceof Error ? err.message : 'Unknown error'
-      }`
-    );
-  }
-};
+      console.log('Customer leaderboard download completed successfully');
+    } catch (err) {
+      console.error('Download error:', err);
+      alert(
+        `Failed to download customer leaderboard: ${
+          err instanceof Error ? err.message : 'Unknown error'
+        }`
+      );
+    }
+  };
+
+  const toggleComparison = (chartKey: string) => {
+    setComparisonVisibility((prev) => ({
+      ...prev,
+      [chartKey]: !prev[chartKey],
+    }));
+  };
+
+  const toneFromAlertLevel = (
+    level: ChartAlert['level']
+  ): 'info' | 'success' | 'warning' | 'critical' => {
+    if (level === 'warning') return 'warning';
+    if (level === 'positive') return 'success';
+    return 'info';
+  };
 
   // --------------------------------------------------------------------
   // Effect: initial sync-status polling + initial data fetches
@@ -430,7 +553,9 @@ const downloadChart = async (chart: ChartData) => {
 
         // Only fetch charts/orders/customers when transitioning to completed
         if (data.status === 'completed' && was !== 'completed') {
-          console.log('✅ Sync completed - fetching charts, orders, and customers');
+          console.log(
+            '✅ Sync completed - fetching charts, orders, and customers'
+          );
 
           if (!isCancelled) {
             try {
@@ -502,7 +627,7 @@ const downloadChart = async (chart: ChartData) => {
   // --------------------------------------------------------------------
   // Tab change handler
   // --------------------------------------------------------------------
-  
+
   const handleTabChange = useCallback(
     (selectedTabIndex: number) => setSelectedTab(selectedTabIndex),
     []
@@ -538,7 +663,8 @@ const downloadChart = async (chart: ChartData) => {
             <BlockStack gap="300">
               <Text as="p" variant="bodyMd">
                 Importing order history...{' '}
-                {syncStatus.orders_synced.toLocaleString()} orders synced so far
+                {syncStatus.orders_synced.toLocaleString()} orders synced so
+                far
               </Text>
 
               <ProgressBar progress={progress} size="small" />
@@ -557,8 +683,8 @@ const downloadChart = async (chart: ChartData) => {
           <Banner tone="success" onDismiss={() => setShowBanner(false)}>
             <Text as="p">
               ✅ Successfully imported{' '}
-              {syncStatus.orders_synced.toLocaleString()} orders from your store
-              history!
+              {syncStatus.orders_synced.toLocaleString()} orders from your
+              store history!
             </Text>
           </Banner>
         );
@@ -578,8 +704,8 @@ const downloadChart = async (chart: ChartData) => {
               )}
 
               <Text as="p" variant="bodySm">
-                Don't worry — new orders will still be tracked. Contact support
-                if this persists.
+                Don't worry — new orders will still be tracked. Contact
+                support if this persists.
               </Text>
             </BlockStack>
           </Banner>
@@ -664,47 +790,89 @@ const downloadChart = async (chart: ChartData) => {
       'Last Order',
     ];
 
-    const rows = sortedCustomers.map((customer) => [
-      <div key={`name-${customer.customer_id}`}>
-        <Text as="p" variant="bodyMd" fontWeight="semibold">
-          {customer.customer_name}
-        </Text>
-        <Text as="p" variant="bodySm" tone="subdued">
-          {customer.customer_email}
-        </Text>
-      </div>,
-      customer.total_orders.toLocaleString(),
-      `$${customer.total_revenue.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-      customer.total_profit !== null ? (
-        <div key={`profit-${customer.customer_id}`}>
-          <Text as="p" variant="bodyMd">
-            ${customer.total_profit.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+    const rows = sortedCustomers.map((customer) => {
+      const revenueDisplay =
+        customer.formatted?.total_revenue ??
+        `$${customer.total_revenue.toLocaleString('en-US', {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })}`;
+
+      const profitDisplay =
+        customer.total_profit !== null
+          ? customer.formatted?.total_profit ??
+            `$${customer.total_profit.toLocaleString('en-US', {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })}`
+          : null;
+
+      const aovDisplay =
+        customer.formatted?.avg_order_value ??
+        `$${customer.avg_order_value.toLocaleString('en-US', {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })}`;
+
+      return [
+        <div key={`name-${customer.customer_id}`}>
+          <Text as="p" variant="bodyMd" fontWeight="semibold">
+            {customer.customer_name}
           </Text>
-          {customer.profit_data_status === 'partial' && (
-            <Badge tone="warning" size="small">
-              Partial data
-            </Badge>
-          )}
-        </div>
-      ) : (
-        <Badge tone="info" size="small">
-          No COGS data
-        </Badge>
-      ),
-      `$${customer.avg_order_value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-      customer.last_order_date
-        ? new Date(customer.last_order_date).toLocaleDateString('en-US', {
-            year: 'numeric',
-            month: 'short',
-            day: 'numeric',
-          })
-        : 'Never',
-    ]);
+          <Text as="p" variant="bodySm" tone="subdued">
+            {customer.customer_email}
+          </Text>
+        </div>,
+        customer.total_orders.toLocaleString(),
+        revenueDisplay,
+        customer.total_profit !== null ? (
+          <div key={`profit-${customer.customer_id}`}>
+            <Text as="p" variant="bodyMd">
+              {profitDisplay}
+            </Text>
+            {customer.profit_data_status === 'partial' && (
+              <Badge tone="warning" size="small">
+                Partial data
+              </Badge>
+            )}
+          </div>
+        ) : (
+          <Badge tone="info" size="small">
+            No COGS data
+          </Badge>
+        ),
+        aovDisplay,
+        customer.last_order_date
+          ? new Date(customer.last_order_date).toLocaleDateString('en-US', {
+              year: 'numeric',
+              month: 'short',
+              day: 'numeric',
+            })
+          : 'Never',
+      ];
+    });
 
     const handleSort = (index: number, direction: SortDirection) => {
       setSortedColumn(index);
       setSortDirection(direction);
     };
+
+    const totalRevenueDisplay =
+      summary.formatted?.total_revenue ??
+      `$${summary.total_revenue.toLocaleString('en-US', {
+        minimumFractionDigits: 2,
+      })}`;
+    const totalProfitDisplay =
+      summary.profit_data_available &&
+      (summary.formatted?.total_profit ??
+        `$${(summary.total_profit ?? 0).toLocaleString('en-US', {
+          minimumFractionDigits: 2,
+        })}`);
+    const avgRevenueDisplay =
+      summary.formatted?.avg_revenue_per_customer ??
+      `$${summary.avg_revenue_per_customer.toLocaleString('en-US', {
+        minimumFractionDigits: 2,
+      })}`;
 
     return (
       <Card>
@@ -723,6 +891,22 @@ const downloadChart = async (chart: ChartData) => {
             </Button>
           </InlineStack>
 
+          {/* Optional leaderboard insights */}
+          {summary.insights && summary.insights.length > 0 && (
+            <BlockStack gap="100">
+              {summary.insights.map((insight, idx) => (
+                <Text
+                  as="p"
+                  key={`leaderboard-insight-${idx}`}
+                  variant="bodySm"
+                  tone="subdued"
+                >
+                  • {insight}
+                </Text>
+              ))}
+            </BlockStack>
+          )}
+
           {/* Summary Cards */}
           <InlineStack gap="400" wrap={false}>
             <Card>
@@ -731,7 +915,7 @@ const downloadChart = async (chart: ChartData) => {
                   Total Revenue
                 </Text>
                 <Text as="p" variant="headingMd">
-                  ${summary.total_revenue.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                  {totalRevenueDisplay}
                 </Text>
               </BlockStack>
             </Card>
@@ -743,7 +927,7 @@ const downloadChart = async (chart: ChartData) => {
                     Total Profit
                   </Text>
                   <Text as="p" variant="headingMd">
-                    ${(summary.total_profit ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                    {totalProfitDisplay}
                   </Text>
                 </BlockStack>
               </Card>
@@ -755,7 +939,7 @@ const downloadChart = async (chart: ChartData) => {
                   Avg Revenue/Customer
                 </Text>
                 <Text as="p" variant="headingMd">
-                  ${summary.avg_revenue_per_customer.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                  {avgRevenueDisplay}
                 </Text>
               </BlockStack>
             </Card>
@@ -763,7 +947,14 @@ const downloadChart = async (chart: ChartData) => {
 
           {/* Data Table */}
           <DataTable
-            columnContentTypes={['text', 'numeric', 'numeric', 'numeric', 'numeric', 'text']}
+            columnContentTypes={[
+              'text',
+              'numeric',
+              'numeric',
+              'numeric',
+              'numeric',
+              'text',
+            ]}
             headings={headings}
             rows={rows}
             sortable={[true, true, true, true, true, true]}
@@ -788,29 +979,67 @@ const downloadChart = async (chart: ChartData) => {
               ? chart.layout.title
               : chart.layout.title?.text || '';
 
+          const chartKey = chart.key || `chart-${index}`;
+          const isComparisonVisible = !!comparisonVisibility[chartKey];
+
+          // Build traces including optional comparison
+          const traces: Plotly.Data[] = [...chart.data];
+          const prevWindow = chart.comparison?.previous_30d;
+          if (prevWindow && isComparisonVisible) {
+            const comparisonTrace = {
+              x: prevWindow.x,
+              y: prevWindow.y,
+              type: 'scatter',
+              mode: 'lines',
+              name: prevWindow.label || 'Previous 30 Days',
+              line: { dash: 'dot' },
+            } as Plotly.Data;
+            traces.push(comparisonTrace);
+          }
+
           return (
-            <Layout.Section key={chart.key || index} variant="oneHalf">
+            <Layout.Section key={chartKey} variant="oneHalf">
               <Card>
                 <BlockStack gap="300">
                   <div style={{ padding: '16px 16px 0 16px' }}>
-                    <InlineStack align="space-between" blockAlign="center">
+                    <InlineStack
+                      align="space-between"
+                      blockAlign="center"
+                      gap="200"
+                    >
                       <Text as="h2" variant="headingMd">
                         {titleText}
                       </Text>
 
-                      {chart.export_url && (
-                        <Button
-                          size="slim"
-                          onClick={() => downloadChart(chart)}
-                        >
-                          Download
-                        </Button>
-                      )}
+                      <InlineStack gap="200" blockAlign="center">
+                        {chart.comparison?.previous_30d && (
+                          <Button
+                            size="slim"
+                            variant={
+                              isComparisonVisible ? 'primary' : 'secondary'
+                            }
+                            onClick={() => toggleComparison(chartKey)}
+                          >
+                            {isComparisonVisible
+                              ? 'Hide comparison'
+                              : 'Compare to previous 30 days'}
+                          </Button>
+                        )}
+
+                        {chart.export_url && (
+                          <Button
+                            size="slim"
+                            onClick={() => downloadChart(chart)}
+                          >
+                            Download
+                          </Button>
+                        )}
+                      </InlineStack>
                     </InlineStack>
                   </div>
 
                   <Plot
-                    data={chart.data}
+                    data={traces}
                     layout={{
                       ...chart.layout,
                       title: undefined,
@@ -821,6 +1050,42 @@ const downloadChart = async (chart: ChartData) => {
                     style={{ width: '100%', height: '400px' }}
                     useResizeHandler
                   />
+
+                  {/* Chart-level alerts */}
+                  {chart.alerts && chart.alerts.length > 0 && (
+                    <div style={{ padding: '0 16px 16px 16px' }}>
+                      <BlockStack gap="200">
+                        {chart.alerts.map((alert, idx) => (
+                          <Banner
+                            key={`chart-alert-${chartKey}-${idx}`}
+                            tone={toneFromAlertLevel(alert.level)}
+                          >
+                            <Text as="p" variant="bodySm">
+                              {alert.message}
+                            </Text>
+                          </Banner>
+                        ))}
+                      </BlockStack>
+                    </div>
+                  )}
+
+                  {/* Chart-level insights / narratives */}
+                  {chart.insights && chart.insights.length > 0 && (
+                    <div style={{ padding: '0 16px 16px 16px' }}>
+                      <BlockStack gap="100">
+                        {chart.insights.map((insight, idx) => (
+                          <Text
+                            as="p"
+                            key={`chart-insight-${chartKey}-${idx}`}
+                            variant="bodySm"
+                            tone="subdued"
+                          >
+                            • {insight}
+                          </Text>
+                        ))}
+                      </BlockStack>
+                    </div>
+                  )}
                 </BlockStack>
               </Card>
             </Layout.Section>
@@ -830,6 +1095,125 @@ const downloadChart = async (chart: ChartData) => {
     );
   };
 
+  const renderOrdersOverview = () => {
+  if (!ordersSummary) return null;
+
+  const totalOrders = ordersSummary.total_orders ?? 0;
+  const formatted = ordersSummary.formatted;
+  const trend = ordersSummary.trend || {};
+
+  const revenueDelta = trend.revenue_30d;
+  const ordersDelta = trend.orders_30d;
+
+  const formatDeltaLabel = (delta?: TrendDelta, label?: string) => {
+    if (!delta || delta.delta_percent == null) return null;
+    const direction =
+      delta.direction === 'up'
+        ? '▲'
+        : delta.direction === 'down'
+        ? '▼'
+        : '•';
+    return `${label || ''} ${direction} ${Math.abs(
+      delta.delta_percent
+    ).toFixed(1)}% vs prior 30 days`;
+  };
+
+  return (
+    <Card>
+      <BlockStack gap="300">
+        <Text as="h2" variant="headingMd">
+          Store overview
+        </Text>
+
+        <InlineStack gap="400" wrap={false}>
+          <Card>
+            <BlockStack gap="100">
+              <Text as="p" variant="bodySm" tone="subdued">
+                Total orders
+              </Text>
+              <Text as="p" variant="headingMd">
+                {totalOrders.toLocaleString()}
+              </Text>
+            </BlockStack>
+          </Card>
+
+          <Card>
+            <BlockStack gap="100">
+              <Text as="p" variant="bodySm" tone="subdued">
+                Total revenue (lifetime)
+              </Text>
+              <Text as="p" variant="headingMd">
+                {formatted?.total_revenue ?? '--'}
+              </Text>
+            </BlockStack>
+          </Card>
+
+          <Card>
+            <BlockStack gap="100">
+              <Text as="p" variant="bodySm" tone="subdued">
+                Avg order value
+              </Text>
+              <Text as="p" variant="headingMd">
+                {formatted?.avg_order_value ?? '--'}
+              </Text>
+            </BlockStack>
+          </Card>
+        </InlineStack>
+
+        {/* Trend deltas text */}
+        <BlockStack gap="100">
+          {revenueDelta && (
+            <Text as="p" variant="bodySm" tone="subdued">
+              {formatDeltaLabel(revenueDelta, 'Revenue')} (
+              {formatted?.revenue_30d || '—'} vs{' '}
+              {formatted?.revenue_prev_30d || '—'})
+            </Text>
+          )}
+          {ordersDelta && (
+            <Text as="p" variant="bodySm" tone="subdued">
+              {formatDeltaLabel(ordersDelta, 'Orders')} (
+              {formatted?.orders_30d || '—'} vs{' '}
+              {formatted?.orders_prev_30d || '—'})
+            </Text>
+          )}
+        </BlockStack>
+
+        {/* Orders summary alerts / insights remain the same */}
+        {ordersSummary.alerts && ordersSummary.alerts.length > 0 && (
+          <BlockStack gap="200">
+            {ordersSummary.alerts.map((alert, idx) => (
+              <Banner
+                key={`orders-alert-${idx}`}
+                tone={toneFromAlertLevel(alert.level)}
+              >
+                <Text as="p" variant="bodySm">
+                  {alert.message}
+                </Text>
+              </Banner>
+            ))}
+          </BlockStack>
+        )}
+
+        {ordersSummary.insights && ordersSummary.insights.length > 0 && (
+          <BlockStack gap="100">
+            {ordersSummary.insights.map((insight, idx) => (
+              <Text
+                as="p"
+                key={`orders-insight-${idx}`}
+                variant="bodySm"
+                tone="subdued"
+              >
+                • {insight}
+              </Text>
+            ))}
+          </BlockStack>
+        )}
+      </BlockStack>
+    </Card>
+  );
+};
+
+
   // --------------------------------------------------------------------
   // Tab content rendering
   // --------------------------------------------------------------------
@@ -837,13 +1221,7 @@ const downloadChart = async (chart: ChartData) => {
   const renderAnalyticsTab = () => {
     return (
       <BlockStack gap="400">
-        {totalOrders !== null && (
-          <Card>
-            <Text as="p" tone="subdued">
-              Your store has {totalOrders.toLocaleString()} orders ready to analyze.
-            </Text>
-          </Card>
-        )}
+        {renderOrdersOverview()}
         {renderCharts()}
       </BlockStack>
     );
@@ -937,7 +1315,11 @@ const downloadChart = async (chart: ChartData) => {
           {/* Only show tabs if sync is completed */}
           {syncStatus?.status === 'completed' && (
             <div style={{ marginTop: '20px' }}>
-              <Tabs tabs={tabs} selected={selectedTab} onSelect={handleTabChange}>
+              <Tabs
+                tabs={tabs}
+                selected={selectedTab}
+                onSelect={handleTabChange}
+              >
                 <div style={{ marginTop: '20px' }}>
                   {selectedTab === 0 && renderAnalyticsTab()}
                   {selectedTab === 1 && renderSKUAnalyticsTab()}
