@@ -1,5 +1,6 @@
 # commerce_app/core/routers/attribution.py
 # FIXED VERSION - SQL injection vulnerabilities removed
+# UPDATED: orders_count now calculated via subquery for accurate new/repeat classification
 from fastapi import APIRouter, HTTPException, Query, Depends
 from commerce_app.core.db import get_conn
 from commerce_app.auth.session_tokens import verify_shopify_session_token
@@ -189,7 +190,15 @@ def normalize_channel(
 
 
 def get_customer_type(orders_count: Optional[int]) -> str:
-    """Determine if customer is new or returning based on their order count."""
+    """
+    Determine if customer is new or returning based on their order count at time of purchase.
+    
+    Args:
+        orders_count: Number of orders the customer had at the time of this order
+        
+    Returns:
+        "New" if this is their first order, "Repeat" otherwise
+    """
     if not orders_count or orders_count <= 1:
         return "New"
     return "Repeat"
@@ -225,7 +234,7 @@ async def attribution_overview(
             shop_id = shop_row[0]
             
             # Get orders with attribution data
-            # FIXED: Use make_interval instead of string formatting
+            # UPDATED: Calculate orders_count at time of purchase via subquery
             await cur.execute(
                 """
                 SELECT 
@@ -236,9 +245,15 @@ async def attribution_overview(
                     (o.raw_json->>'source_name')::text as source_name,
                     (o.raw_json->>'referring_site')::text as referring_site,
                     (o.raw_json->>'landing_site_ref')::text as landing_site_ref,
-                    c.orders_count
+                    (
+                        SELECT COUNT(*) 
+                        FROM shopify.orders o2 
+                        WHERE o2.shop_id = o.shop_id 
+                          AND o2.customer_id = o.customer_id 
+                          AND o2.customer_id IS NOT NULL
+                          AND o2.created_at <= o.created_at
+                    ) as orders_count_at_purchase
                 FROM shopify.orders o
-                LEFT JOIN shopify.customers c ON o.shop_id = c.shop_id AND o.customer_id = c.customer_id
                 WHERE o.shop_id = %s
                   AND o.created_at >= NOW() - make_interval(days => %s)
                   AND o.financial_status IN ('paid', 'partially_paid')
@@ -338,7 +353,6 @@ async def attribution_campaigns(
             shop_id = shop_row[0]
             
             # Get orders with attribution data
-            # FIXED: Use make_interval
             await cur.execute(
                 """
                 SELECT 
@@ -442,7 +456,6 @@ async def attribution_trend(
             date_trunc = "day" if group_by == "day" else "week"
             
             # Get orders with attribution data grouped by date
-            # FIXED: Use make_interval
             await cur.execute(
                 """
                 SELECT 
@@ -543,17 +556,23 @@ async def attribution_customer_split(
             shop_id = shop_row[0]
             
             # Get orders with customer data
-            # FIXED: Use make_interval
+            # UPDATED: Calculate orders_count at time of purchase via subquery
             await cur.execute(
                 """
                 SELECT 
                     (o.raw_json->>'landing_site')::text as landing_site,
                     (o.raw_json->>'source_name')::text as source_name,
                     (o.raw_json->>'referring_site')::text as referring_site,
-                    c.orders_count,
+                    (
+                        SELECT COUNT(*) 
+                        FROM shopify.orders o2 
+                        WHERE o2.shop_id = o.shop_id 
+                          AND o2.customer_id = o.customer_id 
+                          AND o2.customer_id IS NOT NULL
+                          AND o2.created_at <= o.created_at
+                    ) as orders_count_at_purchase,
                     o.total_price
                 FROM shopify.orders o
-                LEFT JOIN shopify.customers c ON o.shop_id = c.shop_id AND o.customer_id = c.customer_id
                 WHERE o.shop_id = %s
                   AND o.created_at >= NOW() - make_interval(days => %s)
                   AND o.financial_status IN ('paid', 'partially_paid')
