@@ -435,6 +435,7 @@ async def attribution_trend(
     Get attribution trend over time showing channel performance by date.
     
     Useful for visualizing channel growth/changes over time.
+    All dates in range are included, with zero values for days with no orders.
     """
     
     # Extract shop_domain from session token
@@ -454,34 +455,109 @@ async def attribution_trend(
             
             # Determine date truncation based on group_by
             date_trunc = "day" if group_by == "day" else "week"
+            interval = "1 day" if group_by == "day" else "1 week"
             
-            # Get orders with attribution data grouped by date
+            # First, get all distinct channels for this shop in the time range
             await cur.execute(
                 """
-                SELECT 
-                    DATE_TRUNC(%s, o.created_at) as period,
+                SELECT DISTINCT
                     (o.raw_json->>'landing_site')::text as landing_site,
                     (o.raw_json->>'source_name')::text as source_name,
-                    (o.raw_json->>'referring_site')::text as referring_site,
-                    COUNT(*) as orders,
-                    SUM(o.total_price) as revenue
+                    (o.raw_json->>'referring_site')::text as referring_site
                 FROM shopify.orders o
                 WHERE o.shop_id = %s
                   AND o.created_at >= NOW() - make_interval(days => %s)
                   AND o.financial_status IN ('paid', 'partially_paid')
-                GROUP BY period, landing_site, source_name, referring_site
-                ORDER BY period ASC
                 """,
-                (date_trunc, shop_id, days)
+                (shop_id, days)
+            )
+            channel_rows = await cur.fetchall()
+            
+            # Build set of unique channels
+            channels_seen = set()
+            for row in channel_rows:
+                landing_site, source_name, referring_site = row
+                utm_data = parse_utm_from_landing_site(landing_site)
+                channel = normalize_channel(
+                    utm_data["utm_source"],
+                    utm_data["utm_medium"],
+                    source_name,
+                    referring_site
+                )
+                channels_seen.add(channel)
+            
+            # Get orders with attribution data grouped by date
+            await cur.execute(
+                """
+                WITH date_series AS (
+                    SELECT DATE_TRUNC(%s, generate_series(
+                        current_date - %s,
+                        current_date,
+                        %s::interval
+                    ))::date AS period
+                )
+                SELECT 
+                    ds.period,
+                    (o.raw_json->>'landing_site')::text as landing_site,
+                    (o.raw_json->>'source_name')::text as source_name,
+                    (o.raw_json->>'referring_site')::text as referring_site,
+                    COUNT(o.order_id) as orders,
+                    COALESCE(SUM(o.total_price), 0) as revenue
+                FROM date_series ds
+                LEFT JOIN shopify.orders o 
+                    ON DATE_TRUNC(%s, o.created_at)::date = ds.period
+                    AND o.shop_id = %s
+                    AND o.financial_status IN ('paid', 'partially_paid')
+                GROUP BY ds.period, landing_site, source_name, referring_site
+                ORDER BY ds.period ASC
+                """,
+                (date_trunc, days, interval, date_trunc, shop_id)
             )
             
             rows = await cur.fetchall()
     
-    # Process into time series by channel
-    time_series = defaultdict(lambda: defaultdict(lambda: {"orders": 0, "revenue": 0.0}))
+    # Generate all periods in range
+    all_periods = []
+    current = datetime.now().date()
+    start = current - timedelta(days=days)
     
+    if group_by == "day":
+        d = start
+        while d <= current:
+            all_periods.append(d.strftime("%Y-%m-%d"))
+            d += timedelta(days=1)
+    else:  # week
+        # Align to week start
+        d = start - timedelta(days=start.weekday())
+        while d <= current:
+            all_periods.append(d.strftime("%Y-%m-%d"))
+            d += timedelta(weeks=1)
+    
+    # Initialize time series with zeros for all channels and all periods
+    time_series = {
+        channel: {period: {"orders": 0, "revenue": 0.0} for period in all_periods}
+        for channel in channels_seen
+    }
+    
+    # If no channels found, return empty but with date range
+    if not channels_seen:
+        return {
+            "series": [],
+            "group_by": group_by,
+            "date_range": {
+                "start": (datetime.now() - timedelta(days=days)).date().isoformat(),
+                "end": datetime.now().date().isoformat(),
+                "days": days
+            }
+        }
+    
+    # Fill in actual data
     for row in rows:
         period, landing_site, source_name, referring_site, orders, revenue = row
+        
+        # Skip rows with no orders (from LEFT JOIN)
+        if orders == 0 or period is None:
+            continue
         
         # Parse UTM and normalize channel
         utm_data = parse_utm_from_landing_site(landing_site)
@@ -495,8 +571,9 @@ async def attribution_trend(
         # Format period as string
         period_str = period.strftime("%Y-%m-%d")
         
-        time_series[channel][period_str]["orders"] += orders
-        time_series[channel][period_str]["revenue"] += float(revenue or 0)
+        if period_str in time_series.get(channel, {}):
+            time_series[channel][period_str]["orders"] += int(orders)
+            time_series[channel][period_str]["revenue"] += float(revenue or 0)
     
     # Format for frontend (array of series)
     series = []
