@@ -10,6 +10,8 @@ import {
   Select,
   Badge,
   Banner,
+  Divider,
+  Box,
 } from '@shopify/polaris';
 import { useState, useEffect, useCallback } from 'react';
 import Plot from 'react-plotly.js';
@@ -51,6 +53,37 @@ interface WhatIfVariables {
   order_volume_change: number;
   cogs_change: number;
   conversion_rate_change: number;
+  price_multiplier: number;
+  price_elasticity: number;
+}
+
+interface PricePreview {
+  price_multiplier: number;
+  price_change_percent: number;
+  elasticity: number;
+  current: {
+    daily_revenue: number;
+    daily_orders: number;
+    average_order_value: number;
+    daily_profit: number;
+  };
+  projected: {
+    daily_revenue: number;
+    daily_orders: number;
+    average_order_value: number;
+    daily_profit: number;
+  };
+  changes: {
+    revenue_change_percent: number;
+    orders_change_percent: number;
+    profit_change_absolute: number;
+    profit_change_percent: number;
+  };
+  analysis: {
+    breakeven_elasticity: number | null;
+    is_profitable_change: boolean;
+    recommendation: string;
+  };
 }
 
 interface SimulationResults {
@@ -66,6 +99,13 @@ interface SimulationResults {
     daily_orders: number;
     average_order_value: number;
     cogs_rate: number;
+  };
+  price_analysis: {
+    price_change_percent: number;
+    elasticity_used: number;
+    demand_effect_percent: number;
+    adjusted_aov: number;
+    adjusted_daily_orders: number;
   };
   results: {
     revenue: {
@@ -121,8 +161,10 @@ export function WhatIfScenariosPage() {
   const [baseline, setBaseline] = useState<BaselineMetrics | null>(null);
   const [simulation, setSimulation] = useState<SimulationResults | null>(null);
   const [presets, setPresets] = useState<Preset[]>([]);
+  const [pricePreview, setPricePreview] = useState<PricePreview | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSimulating, setIsSimulating] = useState(false);
+  const [isLoadingPreview, setIsLoadingPreview] = useState(false);
 
   // Simulation parameters
   const [basePeriodDays, setBasePeriodDays] = useState('90');
@@ -135,6 +177,10 @@ export function WhatIfScenariosPage() {
   const [orderVolumeChange, setOrderVolumeChange] = useState(0);
   const [cogsChange, setCogsChange] = useState(0);
   const [conversionRateChange, setConversionRateChange] = useState(0);
+
+  // Price multiplier controls (1.0 = no change, stored as actual multiplier)
+  const [priceMultiplier, setPriceMultiplier] = useState(100); // 100 = 1.0x
+  const [priceElasticity, setPriceElasticity] = useState(-150); // -150 = -1.5
 
   // Fetch baseline metrics
   const fetchBaseline = useCallback(async () => {
@@ -172,6 +218,42 @@ export function WhatIfScenariosPage() {
     }
   }, []);
 
+  // Fetch price elasticity preview (debounced)
+  const fetchPricePreview = useCallback(async () => {
+    const multiplier = priceMultiplier / 100;
+    const elasticity = priceElasticity / 100;
+
+    // Skip if no price change
+    if (multiplier === 1.0) {
+      setPricePreview(null);
+      return;
+    }
+
+    try {
+      setIsLoadingPreview(true);
+
+      const data = await authenticatedFetch<PricePreview>(
+        `/api/what-if/price-elasticity-preview?price_multiplier=${multiplier}&elasticity=${elasticity}`
+      );
+
+      setPricePreview(data);
+    } catch (error) {
+      console.error('💥 Failed to fetch price preview:', error);
+      setPricePreview(null);
+    } finally {
+      setIsLoadingPreview(false);
+    }
+  }, [priceMultiplier, priceElasticity]);
+
+  // Debounce price preview fetch
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      fetchPricePreview();
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [fetchPricePreview]);
+
   // Run simulation
   const runSimulation = async () => {
     try {
@@ -192,6 +274,8 @@ export function WhatIfScenariosPage() {
               order_volume_change: orderVolumeChange / 100,
               cogs_change: cogsChange / 100,
               conversion_rate_change: conversionRateChange / 100,
+              price_multiplier: priceMultiplier / 100,
+              price_elasticity: priceElasticity / 100,
             },
           }),
         }
@@ -218,6 +302,8 @@ export function WhatIfScenariosPage() {
     setOrderVolumeChange(preset.variables.order_volume_change * 100);
     setCogsChange(preset.variables.cogs_change * 100);
     setConversionRateChange(preset.variables.conversion_rate_change * 100);
+    setPriceMultiplier((preset.variables.price_multiplier ?? 1.0) * 100);
+    setPriceElasticity((preset.variables.price_elasticity ?? -1.5) * 100);
   };
 
   // Reset to baseline
@@ -227,12 +313,28 @@ export function WhatIfScenariosPage() {
     setOrderVolumeChange(0);
     setCogsChange(0);
     setConversionRateChange(0);
+    setPriceMultiplier(100);
+    setPriceElasticity(-150);
   };
 
   useEffect(() => {
     fetchBaseline();
     fetchPresets();
   }, [fetchBaseline, fetchPresets]);
+
+  // Helper to format price multiplier for display
+  const formatPriceChange = (multiplier: number): string => {
+    const change = ((multiplier / 100) - 1) * 100;
+    if (change === 0) return 'No change';
+    return change > 0 ? `+${change.toFixed(0)}%` : `${change.toFixed(0)}%`;
+  };
+
+  // Helper to get badge tone for price change
+  const getPriceChangeTone = (): 'success' | 'warning' | 'critical' | 'info' => {
+    if (!pricePreview) return 'info';
+    if (pricePreview.analysis.is_profitable_change) return 'success';
+    return 'warning';
+  };
 
   // Render loading state
   if (isLoading) {
@@ -418,11 +520,210 @@ export function WhatIfScenariosPage() {
         </BlockStack>
       </Card>
 
+      {/* Price Multiplier Section */}
+      <Card>
+        <BlockStack gap="400">
+          <InlineStack align="space-between" blockAlign="center">
+            <div>
+              <Text as="h3" variant="headingMd">
+                💵 Price Strategy
+              </Text>
+              <Text as="p" variant="bodySm" tone="subdued">
+                Simulate price changes with demand elasticity
+              </Text>
+            </div>
+            {priceMultiplier !== 100 && (
+              <Badge tone={getPriceChangeTone()}>
+                {formatPriceChange(priceMultiplier)}
+              </Badge>
+            )}
+          </InlineStack>
+
+          <BlockStack gap="400">
+            {/* Price Multiplier Slider */}
+            <div>
+              <InlineStack align="space-between">
+                <Text as="p" variant="bodyMd" fontWeight="semibold">
+                  Price Multiplier
+                </Text>
+                <Text as="p" variant="bodyMd" fontWeight="semibold">
+                  {(priceMultiplier / 100).toFixed(2)}x ({formatPriceChange(priceMultiplier)})
+                </Text>
+              </InlineStack>
+              <Text as="p" variant="bodySm" tone="subdued">
+                Adjust all product prices by this multiplier
+              </Text>
+              <RangeSlider
+                label=""
+                value={priceMultiplier}
+                onChange={(value) => setPriceMultiplier(value as number)}
+                min={50}
+                max={200}
+                step={5}
+                output
+                prefix={<Text as="span" variant="bodySm">0.5x</Text>}
+                suffix={<Text as="span" variant="bodySm">2.0x</Text>}
+              />
+            </div>
+
+            {/* Price Elasticity Slider */}
+            <div>
+              <InlineStack align="space-between">
+                <Text as="p" variant="bodyMd" fontWeight="semibold">
+                  Price Elasticity of Demand
+                </Text>
+                <Text as="p" variant="bodyMd" fontWeight="semibold">
+                  {(priceElasticity / 100).toFixed(2)}
+                </Text>
+              </InlineStack>
+              <Text as="p" variant="bodySm" tone="subdued">
+                How sensitive are customers to price changes? (-1.0 = low, -2.0 = high)
+              </Text>
+              <RangeSlider
+                label=""
+                value={priceElasticity}
+                onChange={(value) => setPriceElasticity(value as number)}
+                min={-300}
+                max={0}
+                step={10}
+                output
+                prefix={<Text as="span" variant="bodySm">-3.0</Text>}
+                suffix={<Text as="span" variant="bodySm">0</Text>}
+              />
+            </div>
+          </BlockStack>
+
+          {/* Price Preview Panel */}
+          {priceMultiplier !== 100 && (
+            <>
+              <Divider />
+              {isLoadingPreview ? (
+                <div style={{ textAlign: 'center', padding: '20px' }}>
+                  <Spinner size="small" />
+                  <Text as="p" variant="bodySm" tone="subdued">
+                    Calculating impact...
+                  </Text>
+                </div>
+              ) : pricePreview ? (
+                <BlockStack gap="300">
+                  <Text as="p" variant="bodyMd" fontWeight="semibold">
+                    📈 Projected Daily Impact
+                  </Text>
+
+                  <InlineStack gap="400" wrap={true}>
+                    <Box
+                      background="bg-surface-secondary"
+                      padding="300"
+                      borderRadius="200"
+                    >
+                      <BlockStack gap="100">
+                        <Text as="p" variant="bodySm" tone="subdued">
+                          Orders
+                        </Text>
+                        <Text as="p" variant="headingMd">
+                          {pricePreview.projected.daily_orders.toFixed(1)}
+                        </Text>
+                        <Text
+                          as="p"
+                          variant="bodySm"
+                          tone={pricePreview.changes.orders_change_percent < 0 ? 'critical' : 'success'}
+                        >
+                          {pricePreview.changes.orders_change_percent >= 0 ? '+' : ''}
+                          {pricePreview.changes.orders_change_percent.toFixed(1)}%
+                        </Text>
+                      </BlockStack>
+                    </Box>
+
+                    <Box
+                      background="bg-surface-secondary"
+                      padding="300"
+                      borderRadius="200"
+                    >
+                      <BlockStack gap="100">
+                        <Text as="p" variant="bodySm" tone="subdued">
+                          Avg Order Value
+                        </Text>
+                        <Text as="p" variant="headingMd">
+                          ${pricePreview.projected.average_order_value.toFixed(2)}
+                        </Text>
+                        <Text
+                          as="p"
+                          variant="bodySm"
+                          tone={pricePreview.price_change_percent > 0 ? 'success' : 'critical'}
+                        >
+                          {pricePreview.price_change_percent >= 0 ? '+' : ''}
+                          {pricePreview.price_change_percent.toFixed(1)}%
+                        </Text>
+                      </BlockStack>
+                    </Box>
+
+                    <Box
+                      background="bg-surface-secondary"
+                      padding="300"
+                      borderRadius="200"
+                    >
+                      <BlockStack gap="100">
+                        <Text as="p" variant="bodySm" tone="subdued">
+                          Revenue
+                        </Text>
+                        <Text as="p" variant="headingMd">
+                          ${pricePreview.projected.daily_revenue.toFixed(0)}
+                        </Text>
+                        <Text
+                          as="p"
+                          variant="bodySm"
+                          tone={pricePreview.changes.revenue_change_percent >= 0 ? 'success' : 'critical'}
+                        >
+                          {pricePreview.changes.revenue_change_percent >= 0 ? '+' : ''}
+                          {pricePreview.changes.revenue_change_percent.toFixed(1)}%
+                        </Text>
+                      </BlockStack>
+                    </Box>
+
+                    <Box
+                      background={pricePreview.analysis.is_profitable_change ? 'bg-surface-success' : 'bg-surface-warning'}
+                      padding="300"
+                      borderRadius="200"
+                    >
+                      <BlockStack gap="100">
+                        <Text as="p" variant="bodySm" tone="subdued">
+                          Daily Profit
+                        </Text>
+                        <Text as="p" variant="headingMd">
+                          ${pricePreview.projected.daily_profit.toFixed(0)}
+                        </Text>
+                        <Text
+                          as="p"
+                          variant="bodySm"
+                          tone={pricePreview.changes.profit_change_percent >= 0 ? 'success' : 'critical'}
+                        >
+                          {pricePreview.changes.profit_change_percent >= 0 ? '+' : ''}
+                          {pricePreview.changes.profit_change_percent.toFixed(1)}%
+                        </Text>
+                      </BlockStack>
+                    </Box>
+                  </InlineStack>
+
+                  {/* Recommendation Banner */}
+                  <Banner
+                    tone={pricePreview.analysis.is_profitable_change ? 'success' : 'warning'}
+                  >
+                    <Text as="p" variant="bodyMd">
+                      {pricePreview.analysis.recommendation}
+                    </Text>
+                  </Banner>
+                </BlockStack>
+              ) : null}
+            </>
+          )}
+        </BlockStack>
+      </Card>
+
       {/* What-If Variables */}
       <Card>
         <BlockStack gap="400">
           <Text as="h3" variant="headingMd">
-            🎛️ What If Variables
+            🎛️ Additional Variables
           </Text>
 
           <BlockStack gap="400">
@@ -449,10 +750,10 @@ export function WhatIfScenariosPage() {
             {/* AOV Change */}
             <div>
               <Text as="p" variant="bodyMd" fontWeight="semibold">
-                Average Order Value
+                Average Order Value (Additional)
               </Text>
               <Text as="p" variant="bodySm" tone="subdued">
-                Current: {aovChange >= 0 ? '+' : ''}
+                Beyond price changes: {aovChange >= 0 ? '+' : ''}
                 {aovChange.toFixed(0)}%
               </Text>
               <RangeSlider
@@ -469,10 +770,10 @@ export function WhatIfScenariosPage() {
             {/* Order Volume */}
             <div>
               <Text as="p" variant="bodyMd" fontWeight="semibold">
-                Order Volume
+                Order Volume (Additional)
               </Text>
               <Text as="p" variant="bodySm" tone="subdued">
-                Current: {orderVolumeChange >= 0 ? '+' : ''}
+                Beyond elasticity effects: {orderVolumeChange >= 0 ? '+' : ''}
                 {orderVolumeChange.toFixed(0)}%
               </Text>
               <RangeSlider
@@ -539,6 +840,19 @@ export function WhatIfScenariosPage() {
                 📈 Simulation Results ({simulation.inputs.simulations.toLocaleString()}{' '}
                 simulations)
               </Text>
+
+              {/* Price Analysis Summary */}
+              {simulation.price_analysis.price_change_percent !== 0 && (
+                <Banner tone="info">
+                  <Text as="p" variant="bodyMd">
+                    💵 Price {simulation.price_analysis.price_change_percent > 0 ? 'increase' : 'decrease'} of{' '}
+                    {Math.abs(simulation.price_analysis.price_change_percent).toFixed(0)}% with elasticity{' '}
+                    {simulation.price_analysis.elasticity_used.toFixed(2)} →{' '}
+                    {Math.abs(simulation.price_analysis.demand_effect_percent).toFixed(1)}%{' '}
+                    {simulation.price_analysis.demand_effect_percent < 0 ? 'decrease' : 'increase'} in demand
+                  </Text>
+                </Banner>
+              )}
 
               <InlineStack gap="400" wrap={true}>
                 <Card>

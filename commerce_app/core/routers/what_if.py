@@ -49,6 +49,8 @@ class WhatIfVariables(BaseModel):
     order_volume_change: float = Field(default=0.0, ge=-0.5, le=1.0, description="Order volume change (-50% to +100%)")
     cogs_change: float = Field(default=0.0, ge=-0.3, le=0.5, description="COGS change (-30% to +50%)")
     conversion_rate_change: float = Field(default=0.0, ge=-0.3, le=0.5, description="Conversion rate change (-30% to +50%)")
+    price_multiplier: float = Field(default=1.0, ge=0.5, le=2.0, description="Price multiplier (0.5x to 2.0x, where 1.0 = no change)")
+    price_elasticity: float = Field(default=-1.5, ge=-3.0, le=0.0, description="Price elasticity of demand (typically -1.0 to -2.0)")
 
 
 class SimulationRequest(BaseModel):
@@ -89,6 +91,26 @@ def create_histogram(data: np.ndarray, bins: int = 50) -> Dict[str, List]:
         "frequencies": [int(x) for x in counts],
         "bin_centers": [float((bin_edges[i] + bin_edges[i+1]) / 2) for i in range(len(bin_edges) - 1)]
     }
+
+
+def calculate_price_elasticity_effect(price_change_pct: float, elasticity: float) -> float:
+    """
+    Calculate the demand change based on price elasticity.
+    
+    Price elasticity formula: % change in demand = elasticity * % change in price
+    
+    Example with elasticity of -1.5:
+    - 10% price increase → 15% demand decrease
+    - 20% price decrease → 30% demand increase
+    
+    Args:
+        price_change_pct: Percentage change in price (e.g., 0.10 for 10% increase)
+        elasticity: Price elasticity of demand (typically negative, e.g., -1.5)
+    
+    Returns:
+        Percentage change in demand/order volume
+    """
+    return price_change_pct * elasticity
 
 
 def calculate_sensitivity(base_results: np.ndarray, variables: Dict[str, float], 
@@ -269,6 +291,7 @@ async def run_monte_carlo_simulation(
     This simulates thousands of possible futures based on:
     - Historical volatility
     - User-defined variable changes
+    - Price elasticity effects (price changes affect order volume)
     - Random sampling from probability distributions
     
     Returns probability distributions and statistics for revenue, profit, etc.
@@ -349,38 +372,57 @@ async def run_monte_carlo_simulation(
     # Set random seed for reproducibility (optional)
     np.random.seed(42)
     
+    # Calculate price change percentage from multiplier (1.0 = no change, 1.1 = 10% increase)
+    price_change_pct = request.variables.price_multiplier - 1.0
+    
+    # Calculate demand effect from price elasticity
+    # e.g., 10% price increase with -1.5 elasticity = -15% demand
+    elasticity_demand_effect = calculate_price_elasticity_effect(
+        price_change_pct, 
+        request.variables.price_elasticity
+    )
+    
     # Apply what-if adjustments to baseline
-    adjusted_daily_revenue = base_daily_revenue * (1 + request.variables.revenue_growth)
-    adjusted_daily_orders = base_daily_orders * (1 + request.variables.order_volume_change)
-    adjusted_aov = base_aov * (1 + request.variables.aov_change)
-    adjusted_cogs_rate = (base_daily_cogs / base_daily_revenue) * (1 + request.variables.cogs_change) if base_daily_revenue > 0 else 0
+    # Price multiplier directly affects AOV (in addition to any manual aov_change)
+    adjusted_aov = base_aov * request.variables.price_multiplier * (1 + request.variables.aov_change)
+    
+    # Order volume is affected by:
+    # 1. Manual order_volume_change
+    # 2. Price elasticity effect (price increase reduces demand)
+    adjusted_daily_orders = base_daily_orders * (1 + request.variables.order_volume_change) * (1 + elasticity_demand_effect)
+    
+    # Revenue growth is applied on top of price/volume effects
+    adjusted_daily_revenue = adjusted_aov * adjusted_daily_orders * (1 + request.variables.revenue_growth)
+    
+    # COGS rate adjustment (COGS as percentage of revenue)
+    # Note: When prices increase, COGS stays same per unit, so margin improves
+    base_cogs_per_order = base_daily_cogs / base_daily_orders if base_daily_orders > 0 else 0
+    adjusted_cogs_per_order = base_cogs_per_order * (1 + request.variables.cogs_change)
     
     # Run simulations
     for i in range(n_sims):
-        # Sample from normal distributions based on historical volatility
-        # Each day in forecast period gets random variation
-        daily_sim_revenues = np.random.normal(
-            adjusted_daily_revenue, 
-            revenue_std * 0.8,  # Reduce volatility slightly for projections
-            forecast_days
-        )
+        # Sample AOV with price-adjusted mean
+        sim_aov = np.random.normal(adjusted_aov, aov_std * 0.8)
+        sim_aov = max(sim_aov, adjusted_aov * 0.5)  # Floor at 50% of adjusted AOV
         
+        # Sample daily orders with elasticity-adjusted mean
         daily_sim_orders = np.random.normal(
             adjusted_daily_orders,
             order_std * 0.8,
             forecast_days
         )
-        
-        # Ensure no negative values
-        daily_sim_revenues = np.maximum(daily_sim_revenues, 0)
         daily_sim_orders = np.maximum(daily_sim_orders, 0)
+        
+        # Calculate daily revenue
+        daily_sim_revenues = daily_sim_orders * sim_aov * (1 + request.variables.revenue_growth)
+        daily_sim_revenues = np.maximum(daily_sim_revenues, 0)
         
         # Calculate totals for this simulation
         total_revenue = np.sum(daily_sim_revenues)
         total_orders = np.sum(daily_sim_orders)
         
-        # Calculate COGS with adjusted rate
-        total_cogs = total_revenue * adjusted_cogs_rate
+        # Calculate COGS (per-order basis, not affected by price increase)
+        total_cogs = total_orders * adjusted_cogs_per_order
         
         # Calculate profit
         total_profit = total_revenue - total_cogs
@@ -405,14 +447,15 @@ async def run_monte_carlo_simulation(
     # Calculate probability of positive profit
     probability_positive_profit = float(np.sum(simulated_profits > 0) / n_sims)
     
-    # Calculate sensitivity analysis
+    # Calculate sensitivity analysis (include price_multiplier effect)
     sensitivity = calculate_sensitivity(
         simulated_revenues,
         {
             "revenue_growth": request.variables.revenue_growth,
             "aov_change": request.variables.aov_change,
             "order_volume_change": request.variables.order_volume_change,
-            "cogs_change": request.variables.cogs_change
+            "cogs_change": request.variables.cogs_change,
+            "price_multiplier": price_change_pct,  # Use the percentage change
         },
         {"base_revenue": base_daily_revenue}
     )
@@ -430,6 +473,13 @@ async def run_monte_carlo_simulation(
             "daily_orders": round(base_daily_orders, 2),
             "average_order_value": round(base_aov, 2),
             "cogs_rate": round((base_daily_cogs / base_daily_revenue * 100) if base_daily_revenue > 0 else 0, 2)
+        },
+        "price_analysis": {
+            "price_change_percent": round(price_change_pct * 100, 2),
+            "elasticity_used": request.variables.price_elasticity,
+            "demand_effect_percent": round(elasticity_demand_effect * 100, 2),
+            "adjusted_aov": round(adjusted_aov, 2),
+            "adjusted_daily_orders": round(adjusted_daily_orders, 2)
         },
         "results": {
             "revenue": {
@@ -450,9 +500,160 @@ async def run_monte_carlo_simulation(
             profit_stats, 
             probability_positive_profit,
             sensitivity,
-            request.variables
+            request.variables,
+            price_change_pct,
+            elasticity_demand_effect
         )
     }
+
+
+@router.get("/what-if/price-elasticity-preview")
+async def preview_price_elasticity(
+    price_multiplier: float = Query(default=1.0, ge=0.5, le=2.0, description="Price multiplier (1.0 = no change)"),
+    elasticity: float = Query(default=-1.5, ge=-3.0, le=0.0, description="Price elasticity of demand"),
+    shop_domain: str = Depends(get_shop_from_token)
+):
+    """
+    Preview the effect of a price change without running full simulation.
+    
+    Useful for the frontend slider to show real-time impact estimates.
+    
+    Returns:
+    - Expected demand change
+    - Estimated revenue impact
+    - Break-even analysis
+    """
+    
+    # Get current baseline
+    async with get_conn() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "SELECT shop_id FROM shopify.shops WHERE shop_domain = %s",
+                (shop_domain,)
+            )
+            shop_row = await cur.fetchone()
+            if not shop_row:
+                raise HTTPException(404, "Shop not found")
+            
+            shop_id = shop_row[0]
+            
+            # Get recent averages (last 30 days)
+            await cur.execute(
+                """
+                SELECT 
+                    COALESCE(AVG(daily_revenue), 0) as avg_revenue,
+                    COALESCE(AVG(daily_orders), 0) as avg_orders,
+                    COALESCE(AVG(daily_aov), 0) as avg_aov,
+                    COALESCE(AVG(daily_cogs), 0) as avg_cogs
+                FROM (
+                    SELECT 
+                        o.order_date,
+                        SUM(o.total_price) as daily_revenue,
+                        COUNT(DISTINCT o.order_id) as daily_orders,
+                        AVG(o.total_price) as daily_aov,
+                        COALESCE(SUM(oli.quantity * pv.cost), 0) as daily_cogs
+                    FROM shopify.orders o
+                    LEFT JOIN shopify.order_line_items oli 
+                        ON o.shop_id = oli.shop_id AND o.order_id = oli.order_id
+                    LEFT JOIN shopify.product_variants pv 
+                        ON oli.shop_id = pv.shop_id 
+                        AND oli.product_id = pv.product_id 
+                        AND oli.variant_id = pv.variant_id
+                    WHERE o.shop_id = %s
+                      AND o.order_date >= CURRENT_DATE - 30
+                      AND o.financial_status IN ('paid', 'partially_paid')
+                    GROUP BY o.order_date
+                ) daily_stats
+                """,
+                (shop_id,)
+            )
+            
+            baseline = await cur.fetchone()
+    
+    if not baseline or baseline[0] == 0:
+        raise HTTPException(404, "No recent data for preview")
+    
+    avg_revenue, avg_orders, avg_aov, avg_cogs = baseline
+    
+    # Calculate effects
+    price_change_pct = price_multiplier - 1.0
+    demand_effect = calculate_price_elasticity_effect(price_change_pct, elasticity)
+    
+    # New projected values
+    new_aov = float(avg_aov) * price_multiplier
+    new_orders = float(avg_orders) * (1 + demand_effect)
+    new_revenue = new_aov * new_orders
+    
+    # COGS per order stays constant (price increase doesn't change cost)
+    cogs_per_order = float(avg_cogs) / float(avg_orders) if avg_orders > 0 else 0
+    new_cogs = cogs_per_order * new_orders
+    
+    # Profit calculations
+    old_profit = float(avg_revenue) - float(avg_cogs)
+    new_profit = new_revenue - new_cogs
+    profit_change = new_profit - old_profit
+    
+    # Break-even elasticity (at what elasticity would revenue stay the same?)
+    # Revenue = Price * Quantity
+    # For revenue to stay same: new_price * new_quantity = old_price * old_quantity
+    # (1 + price_change) * (1 + elasticity * price_change) = 1
+    # Solving: elasticity_breakeven = -1 / (1 + price_change) for price_change != -1
+    if price_change_pct != 0:
+        breakeven_elasticity = -1 / price_multiplier
+    else:
+        breakeven_elasticity = None
+    
+    return {
+        "price_multiplier": price_multiplier,
+        "price_change_percent": round(price_change_pct * 100, 2),
+        "elasticity": elasticity,
+        "current": {
+            "daily_revenue": round(float(avg_revenue), 2),
+            "daily_orders": round(float(avg_orders), 2),
+            "average_order_value": round(float(avg_aov), 2),
+            "daily_profit": round(old_profit, 2)
+        },
+        "projected": {
+            "daily_revenue": round(new_revenue, 2),
+            "daily_orders": round(new_orders, 2),
+            "average_order_value": round(new_aov, 2),
+            "daily_profit": round(new_profit, 2)
+        },
+        "changes": {
+            "revenue_change_percent": round((new_revenue / float(avg_revenue) - 1) * 100, 2) if avg_revenue > 0 else 0,
+            "orders_change_percent": round(demand_effect * 100, 2),
+            "profit_change_absolute": round(profit_change, 2),
+            "profit_change_percent": round((profit_change / old_profit) * 100, 2) if old_profit > 0 else 0
+        },
+        "analysis": {
+            "breakeven_elasticity": round(breakeven_elasticity, 3) if breakeven_elasticity else None,
+            "is_profitable_change": profit_change > 0,
+            "recommendation": get_price_recommendation(price_change_pct, demand_effect, profit_change, old_profit)
+        }
+    }
+
+
+def get_price_recommendation(price_change: float, demand_effect: float, profit_change: float, old_profit: float) -> str:
+    """Generate a recommendation based on price change analysis"""
+    
+    if price_change == 0:
+        return "No price change - baseline scenario"
+    
+    profit_change_pct = (profit_change / old_profit * 100) if old_profit > 0 else 0
+    
+    if price_change > 0:  # Price increase
+        if profit_change > 0:
+            if profit_change_pct > 10:
+                return f"✅ Strong opportunity: {price_change*100:.0f}% price increase could boost profit by {profit_change_pct:.1f}%"
+            else:
+                return f"✅ Modest gain: Price increase yields {profit_change_pct:.1f}% profit improvement"
+        else:
+            return f"⚠️ Caution: Demand drop ({demand_effect*100:.1f}%) may outweigh price benefit"
+    else:  # Price decrease
+        if profit_change > 0:
+            return f"✅ Volume play works: Lower price drives enough volume for {profit_change_pct:.1f}% profit gain"
+        else:
+            return f"⚠️ Not recommended: Volume increase doesn't offset margin loss"
 
 
 @router.get("/what-if/presets")
@@ -467,6 +668,7 @@ async def get_preset_scenarios(
     - Pessimistic downturn  
     - Conservative estimate
     - Holiday season
+    - Price optimization scenarios
     """
     
     return {
@@ -480,7 +682,9 @@ async def get_preset_scenarios(
                     "aov_change": 0.10,
                     "order_volume_change": 0.15,
                     "cogs_change": -0.05,
-                    "conversion_rate_change": 0.10
+                    "conversion_rate_change": 0.10,
+                    "price_multiplier": 1.0,
+                    "price_elasticity": -1.5
                 }
             },
             {
@@ -492,7 +696,9 @@ async def get_preset_scenarios(
                     "aov_change": -0.05,
                     "order_volume_change": -0.15,
                     "cogs_change": 0.10,
-                    "conversion_rate_change": -0.05
+                    "conversion_rate_change": -0.05,
+                    "price_multiplier": 1.0,
+                    "price_elasticity": -1.5
                 }
             },
             {
@@ -504,7 +710,9 @@ async def get_preset_scenarios(
                     "aov_change": 0.02,
                     "order_volume_change": 0.03,
                     "cogs_change": 0.03,
-                    "conversion_rate_change": 0.01
+                    "conversion_rate_change": 0.01,
+                    "price_multiplier": 1.0,
+                    "price_elasticity": -1.5
                 }
             },
             {
@@ -516,7 +724,9 @@ async def get_preset_scenarios(
                     "aov_change": -0.10,
                     "order_volume_change": 0.60,
                     "cogs_change": 0.05,
-                    "conversion_rate_change": 0.20
+                    "conversion_rate_change": 0.20,
+                    "price_multiplier": 0.85,  # 15% discount
+                    "price_elasticity": -2.0  # Higher elasticity during holidays
                 }
             },
             {
@@ -528,7 +738,9 @@ async def get_preset_scenarios(
                     "aov_change": 0.0,
                     "order_volume_change": 0.0,
                     "cogs_change": -0.15,
-                    "conversion_rate_change": 0.0
+                    "conversion_rate_change": 0.0,
+                    "price_multiplier": 1.0,
+                    "price_elasticity": -1.5
                 }
             },
             {
@@ -540,7 +752,51 @@ async def get_preset_scenarios(
                     "aov_change": -0.05,
                     "order_volume_change": 0.40,
                     "cogs_change": 0.08,
-                    "conversion_rate_change": 0.05
+                    "conversion_rate_change": 0.05,
+                    "price_multiplier": 1.0,
+                    "price_elasticity": -1.5
+                }
+            },
+            {
+                "name": "Premium Positioning",
+                "description": "10% price increase for premium brand",
+                "icon": "💎",
+                "variables": {
+                    "revenue_growth": 0.0,
+                    "aov_change": 0.0,
+                    "order_volume_change": 0.0,
+                    "cogs_change": 0.0,
+                    "conversion_rate_change": 0.0,
+                    "price_multiplier": 1.10,  # 10% price increase
+                    "price_elasticity": -1.0  # Low elasticity (premium/loyal customers)
+                }
+            },
+            {
+                "name": "Volume Strategy",
+                "description": "15% price cut to drive volume",
+                "icon": "🚀",
+                "variables": {
+                    "revenue_growth": 0.0,
+                    "aov_change": 0.0,
+                    "order_volume_change": 0.0,
+                    "cogs_change": 0.0,
+                    "conversion_rate_change": 0.0,
+                    "price_multiplier": 0.85,  # 15% price decrease
+                    "price_elasticity": -2.0  # High elasticity (price-sensitive market)
+                }
+            },
+            {
+                "name": "Inflation Adjustment",
+                "description": "5% price increase to offset rising costs",
+                "icon": "📈",
+                "variables": {
+                    "revenue_growth": 0.0,
+                    "aov_change": 0.0,
+                    "order_volume_change": 0.0,
+                    "cogs_change": 0.05,  # COGS up 5%
+                    "conversion_rate_change": 0.0,
+                    "price_multiplier": 1.05,  # Price up 5% to match
+                    "price_elasticity": -1.2  # Moderate elasticity
                 }
             }
         ]
@@ -552,11 +808,22 @@ def generate_insights(
     profit_stats: Dict,
     prob_positive: float,
     sensitivity: Dict[str, float],
-    variables: WhatIfVariables
+    variables: WhatIfVariables,
+    price_change_pct: float = 0.0,
+    demand_effect: float = 0.0
 ) -> List[str]:
     """Generate natural language insights from simulation results"""
     
     insights = []
+    
+    # Price change insight (if applicable)
+    if price_change_pct != 0:
+        direction = "increase" if price_change_pct > 0 else "decrease"
+        insights.append(
+            f"💵 {abs(price_change_pct)*100:.0f}% price {direction} → "
+            f"{abs(demand_effect)*100:.1f}% {'decrease' if demand_effect < 0 else 'increase'} in orders "
+            f"(elasticity: {variables.price_elasticity})"
+        )
     
     # Probability insight
     if prob_positive >= 0.90:
