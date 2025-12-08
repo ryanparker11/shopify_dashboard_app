@@ -1231,7 +1231,7 @@ function AppContent() {
               </Text>
             )}
           </BlockStack>
-
+{/*
           {ordersSummary.alerts && ordersSummary.alerts.length > 0 && (
             <BlockStack gap="200">
               {ordersSummary.alerts.map((alert, idx) => (
@@ -1243,8 +1243,9 @@ function AppContent() {
               ))}
             </BlockStack>
           )}
+*/}
 
-          {ordersSummary.insights && ordersSummary.insights.length > 0 && (
+          {/*ordersSummary.insights && ordersSummary.insights.length > 0 && (
             <BlockStack gap="100">
               {ordersSummary.insights.map((insight, idx) => (
                 <Text
@@ -1257,7 +1258,7 @@ function AppContent() {
                 </Text>
               ))}
             </BlockStack>
-          )}
+          )*/}
         </BlockStack>
       </Card>
     );
