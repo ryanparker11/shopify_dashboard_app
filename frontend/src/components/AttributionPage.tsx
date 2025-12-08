@@ -8,12 +8,14 @@ import {
   Text,
   BlockStack,
   InlineGrid,
+  InlineStack,
   Select,
   Badge,
   DataTable,
-  Banner
+  Banner,
+  Button
 } from '@shopify/polaris';
-import { authenticatedFetch } from '../lib/api';
+import { authenticatedFetch, authenticatedBlobFetch } from '../lib/api';
 
 // Type definitions
 interface AttributionPageProps {
@@ -36,6 +38,7 @@ interface AttributionOverview {
     end: string;
     days: number;
   };
+  export_url?: string;
 }
 
 interface CampaignMetrics {
@@ -55,6 +58,7 @@ interface CampaignAttribution {
     end: string;
     days: number;
   };
+  export_url?: string;
 }
 
 interface TrendDataPoint {
@@ -76,6 +80,7 @@ interface AttributionTrend {
     end: string;
     days: number;
   };
+  export_url?: string;
 }
 
 interface CustomerTypeMetrics {
@@ -97,6 +102,7 @@ interface CustomerSplitData {
     end: string;
     days: number;
   };
+  export_url?: string;
 }
 
 // Color palette for channels (consistent across charts)
@@ -156,6 +162,60 @@ export function AttributionPage({ shopDomain: shopDomainProp }: AttributionPageP
       console.error('Error loading attribution:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // -----------------------
+  // Download Handlers
+  // -----------------------
+  const downloadExcel = async (exportType: 'overview' | 'campaigns' | 'trend' | 'customer-split') => {
+    try {
+      let url: string;
+      let filename: string;
+      const dateStr = new Date().toISOString().slice(0, 10);
+
+      switch (exportType) {
+        case 'overview':
+          url = `/api/attribution/export/overview?days=${days}`;
+          filename = `attribution_overview_${days}d_${dateStr}.xlsx`;
+          break;
+        case 'campaigns':
+          url = `/api/attribution/export/campaigns?days=${days}`;
+          filename = `attribution_campaigns_${days}d_${dateStr}.xlsx`;
+          break;
+        case 'trend':
+          url = `/api/attribution/export/trend?days=${days}&group_by=${trendGroupBy}`;
+          filename = `attribution_trend_${trendGroupBy}_${days}d_${dateStr}.xlsx`;
+          break;
+        case 'customer-split':
+          url = `/api/attribution/export/customer-split?days=${days}`;
+          filename = `attribution_customer_split_${days}d_${dateStr}.xlsx`;
+          break;
+        default:
+          return;
+      }
+
+      console.log('Attempting to download from:', url);
+      const blob = await authenticatedBlobFetch(url);
+      console.log('Blob created, size:', blob.size, 'type:', blob.type);
+
+      const objectUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = objectUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(objectUrl);
+
+      console.log('Download completed successfully');
+    } catch (err) {
+      console.error('Download error:', err);
+      alert(
+        `Failed to download data: ${
+          err instanceof Error ? err.message : 'Unknown error'
+        }`
+      );
     }
   };
 
@@ -338,7 +398,12 @@ export function AttributionPage({ shopDomain: shopDomainProp }: AttributionPageP
                   <>
                     <Card>
                       <BlockStack gap="400">
-                        <Text as="h2" variant="headingMd">Overview</Text>
+                        <InlineStack align="space-between" blockAlign="center">
+                          <Text as="h2" variant="headingMd">Overview</Text>
+                          <Button onClick={() => downloadExcel('overview')}>
+                            Download Excel
+                          </Button>
+                        </InlineStack>
                         <InlineGrid columns={5} gap="400">
                           <Card>
                             <BlockStack gap="200">
@@ -391,7 +456,12 @@ export function AttributionPage({ shopDomain: shopDomainProp }: AttributionPageP
                     {/* Channel Performance Table */}
                     <Card>
                       <BlockStack gap="400">
-                        <Text as="h2" variant="headingMd">Channel Performance</Text>
+                        <InlineStack align="space-between" blockAlign="center">
+                          <Text as="h2" variant="headingMd">Channel Performance</Text>
+                          <Button size="slim" onClick={() => downloadExcel('overview')}>
+                            Download
+                          </Button>
+                        </InlineStack>
                         <DataTable
                           columnContentTypes={['text', 'numeric', 'numeric', 'numeric', 'numeric', 'numeric', 'text']}
                           headings={['Channel', 'Orders', 'Revenue', 'AOV', 'New', 'Repeat', 'Split']}
@@ -420,7 +490,12 @@ export function AttributionPage({ shopDomain: shopDomainProp }: AttributionPageP
                     {trend && trend.series.length > 0 && (
                       <Card>
                         <BlockStack gap="400">
-                          <Text as="h2" variant="headingMd">Channel Revenue Trend</Text>
+                          <InlineStack align="space-between" blockAlign="center">
+                            <Text as="h2" variant="headingMd">Channel Revenue Trend</Text>
+                            <Button size="slim" onClick={() => downloadExcel('trend')}>
+                              Download
+                            </Button>
+                          </InlineStack>
                           {attributionTrendChart && (
                             <Plot
                               data={attributionTrendChart.data}
@@ -437,7 +512,12 @@ export function AttributionPage({ shopDomain: shopDomainProp }: AttributionPageP
                     {customerSplit && (
                       <Card>
                         <BlockStack gap="400">
-                          <Text as="h2" variant="headingMd">Customer Acquisition vs Retention</Text>
+                          <InlineStack align="space-between" blockAlign="center">
+                            <Text as="h2" variant="headingMd">Customer Acquisition vs Retention</Text>
+                            <Button size="slim" onClick={() => downloadExcel('customer-split')}>
+                              Download
+                            </Button>
+                          </InlineStack>
                           <Banner tone="info">
                             <Text as="p">
                               Green = New customers (acquisition), Purple = Repeat customers (retention). 
@@ -472,7 +552,12 @@ export function AttributionPage({ shopDomain: shopDomainProp }: AttributionPageP
                     {campaigns && campaigns.campaigns.length > 0 && (
                       <Card>
                         <BlockStack gap="400">
-                          <Text as="h2" variant="headingMd">Top Campaigns</Text>
+                          <InlineStack align="space-between" blockAlign="center">
+                            <Text as="h2" variant="headingMd">Top Campaigns</Text>
+                            <Button size="slim" onClick={() => downloadExcel('campaigns')}>
+                              Download
+                            </Button>
+                          </InlineStack>
                           <Banner>
                             <Text as="p">
                               Showing campaigns with UTM tracking. Total campaigns tracked: {campaigns.total_campaigns}

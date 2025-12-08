@@ -1,14 +1,18 @@
 # commerce_app/core/routers/attribution.py
 # FIXED VERSION - SQL injection vulnerabilities removed
 # UPDATED: orders_count now calculated via subquery for accurate new/repeat classification
+# UPDATED: Added Excel export endpoints for attribution data
 from fastapi import APIRouter, HTTPException, Query, Depends
+from fastapi.responses import StreamingResponse
 from commerce_app.core.db import get_conn
 from commerce_app.auth.session_tokens import verify_shopify_session_token
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
+from io import BytesIO
 import json
 import urllib.parse as urlparse
 from collections import defaultdict
+import pandas as pd
 
 router = APIRouter()
 
@@ -321,7 +325,8 @@ async def attribution_overview(
             "start": (datetime.now() - timedelta(days=days)).date().isoformat(),
             "end": datetime.now().date().isoformat(),
             "days": days
-        }
+        },
+        "export_url": f"/attribution/export/overview?days={days}"
     }
 
 
@@ -421,7 +426,8 @@ async def attribution_campaigns(
             "start": (datetime.now() - timedelta(days=days)).date().isoformat(),
             "end": datetime.now().date().isoformat(),
             "days": days
-        }
+        },
+        "export_url": f"/attribution/export/campaigns?days={days}"
     }
 
 
@@ -548,7 +554,8 @@ async def attribution_trend(
                 "start": (datetime.now() - timedelta(days=days)).date().isoformat(),
                 "end": datetime.now().date().isoformat(),
                 "days": days
-            }
+            },
+            "export_url": f"/attribution/export/trend?days={days}&group_by={group_by}"
         }
     
     # Fill in actual data
@@ -602,7 +609,8 @@ async def attribution_trend(
             "start": (datetime.now() - timedelta(days=days)).date().isoformat(),
             "end": datetime.now().date().isoformat(),
             "days": days
-        }
+        },
+        "export_url": f"/attribution/export/trend?days={days}&group_by={group_by}"
     }
 
 
@@ -720,5 +728,514 @@ async def attribution_customer_split(
             "start": (datetime.now() - timedelta(days=days)).date().isoformat(),
             "end": datetime.now().date().isoformat(),
             "days": days
-        }
+        },
+        "export_url": f"/attribution/export/customer-split?days={days}"
     }
+
+
+# ------------- Excel Export Endpoints ------------- #
+
+@router.get("/attribution/export/overview")
+async def export_attribution_overview(
+    session: dict = Depends(verify_shopify_session_token),
+    days: int = Query(default=30, ge=1, le=365, description="Number of days to analyze")
+):
+    """
+    Export channel attribution overview as Excel file.
+    
+    Includes: Channel, Orders, Revenue, AOV, New Customers, Repeat Customers
+    """
+    shop_domain = get_shop_from_session(session)
+    
+    async with get_conn() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "SELECT shop_id FROM shopify.shops WHERE shop_domain = %s",
+                (shop_domain,)
+            )
+            shop_row = await cur.fetchone()
+            if not shop_row:
+                raise HTTPException(404, "Shop not found")
+            
+            shop_id = shop_row[0]
+            
+            await cur.execute(
+                """
+                SELECT 
+                    o.order_id,
+                    o.total_price,
+                    o.created_at,
+                    (o.raw_json->>'landing_site')::text as landing_site,
+                    (o.raw_json->>'source_name')::text as source_name,
+                    (o.raw_json->>'referring_site')::text as referring_site,
+                    (
+                        SELECT COUNT(*) 
+                        FROM shopify.orders o2 
+                        WHERE o2.shop_id = o.shop_id 
+                          AND o2.customer_id = o.customer_id 
+                          AND o2.customer_id IS NOT NULL
+                          AND o2.created_at <= o.created_at
+                    ) as orders_count_at_purchase
+                FROM shopify.orders o
+                WHERE o.shop_id = %s
+                  AND o.created_at >= NOW() - make_interval(days => %s)
+                  AND o.financial_status IN ('paid', 'partially_paid')
+                ORDER BY o.created_at DESC
+                """,
+                (shop_id, days)
+            )
+            orders = await cur.fetchall()
+    
+    # Process into channel stats
+    channel_stats = defaultdict(lambda: {
+        "orders": 0,
+        "revenue": 0.0,
+        "new_customers": 0,
+        "repeat_customers": 0
+    })
+    
+    for order in orders:
+        order_id, total_price, created_at, landing_site, source_name, referring_site, orders_count = order
+        utm_data = parse_utm_from_landing_site(landing_site)
+        channel = normalize_channel(
+            utm_data["utm_source"],
+            utm_data["utm_medium"],
+            source_name,
+            referring_site
+        )
+        
+        channel_stats[channel]["orders"] += 1
+        channel_stats[channel]["revenue"] += float(total_price or 0)
+        
+        customer_type = get_customer_type(orders_count)
+        if customer_type == "New":
+            channel_stats[channel]["new_customers"] += 1
+        else:
+            channel_stats[channel]["repeat_customers"] += 1
+    
+    # Build DataFrame
+    rows = []
+    for channel, stats in channel_stats.items():
+        aov = stats["revenue"] / stats["orders"] if stats["orders"] > 0 else 0
+        rows.append({
+            "Channel": channel,
+            "Orders": stats["orders"],
+            "Revenue": round(stats["revenue"], 2),
+            "AOV": round(aov, 2),
+            "New Customers": stats["new_customers"],
+            "Repeat Customers": stats["repeat_customers"]
+        })
+    
+    df = pd.DataFrame(rows)
+    df = df.sort_values("Revenue", ascending=False)
+    
+    # Build Excel
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        df.to_excel(writer, index=False, sheet_name="Channel Attribution")
+        
+        workbook = writer.book
+        worksheet = writer.sheets["Channel Attribution"]
+        
+        # Currency format
+        currency_format = workbook.add_format({'num_format': '$#,##0.00'})
+        
+        # Apply formatting
+        worksheet.set_column('A:A', 25)  # Channel
+        worksheet.set_column('B:B', 12)  # Orders
+        worksheet.set_column('C:C', 15, currency_format)  # Revenue
+        worksheet.set_column('D:D', 12, currency_format)  # AOV
+        worksheet.set_column('E:E', 15)  # New Customers
+        worksheet.set_column('F:F', 18)  # Repeat Customers
+    
+    output.seek(0)
+    
+    filename = f"attribution_overview_{days}d_{datetime.utcnow().strftime('%Y%m%d')}.xlsx"
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers=headers
+    )
+
+
+@router.get("/attribution/export/campaigns")
+async def export_attribution_campaigns(
+    session: dict = Depends(verify_shopify_session_token),
+    days: int = Query(default=30, ge=1, le=365, description="Number of days to analyze")
+):
+    """
+    Export campaign attribution data as Excel file.
+    
+    Includes: Campaign, Source, Medium, Orders, Revenue, AOV
+    """
+    shop_domain = get_shop_from_session(session)
+    
+    async with get_conn() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "SELECT shop_id FROM shopify.shops WHERE shop_domain = %s",
+                (shop_domain,)
+            )
+            shop_row = await cur.fetchone()
+            if not shop_row:
+                raise HTTPException(404, "Shop not found")
+            
+            shop_id = shop_row[0]
+            
+            await cur.execute(
+                """
+                SELECT 
+                    o.order_id,
+                    o.total_price,
+                    o.created_at,
+                    (o.raw_json->>'landing_site')::text as landing_site
+                FROM shopify.orders o
+                WHERE o.shop_id = %s
+                  AND o.created_at >= NOW() - make_interval(days => %s)
+                  AND o.financial_status IN ('paid', 'partially_paid')
+                ORDER BY o.created_at DESC
+                """,
+                (shop_id, days)
+            )
+            orders = await cur.fetchall()
+    
+    # Process campaigns
+    campaign_stats = defaultdict(lambda: {
+        "orders": 0,
+        "revenue": 0.0,
+        "source": None,
+        "medium": None
+    })
+    
+    for order in orders:
+        order_id, total_price, created_at, landing_site = order
+        utm_data = parse_utm_from_landing_site(landing_site)
+        campaign = utm_data.get("utm_campaign")
+        
+        if campaign:
+            campaign_stats[campaign]["orders"] += 1
+            campaign_stats[campaign]["revenue"] += float(total_price or 0)
+            if not campaign_stats[campaign]["source"]:
+                campaign_stats[campaign]["source"] = utm_data.get("utm_source")
+                campaign_stats[campaign]["medium"] = utm_data.get("utm_medium")
+    
+    # Build DataFrame
+    rows = []
+    for campaign_name, stats in campaign_stats.items():
+        aov = stats["revenue"] / stats["orders"] if stats["orders"] > 0 else 0
+        rows.append({
+            "Campaign": campaign_name,
+            "Source": stats["source"] or "",
+            "Medium": stats["medium"] or "",
+            "Orders": stats["orders"],
+            "Revenue": round(stats["revenue"], 2),
+            "AOV": round(aov, 2)
+        })
+    
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df = df.sort_values("Revenue", ascending=False)
+    
+    # Build Excel
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        df.to_excel(writer, index=False, sheet_name="Campaign Attribution")
+        
+        workbook = writer.book
+        worksheet = writer.sheets["Campaign Attribution"]
+        
+        currency_format = workbook.add_format({'num_format': '$#,##0.00'})
+        
+        worksheet.set_column('A:A', 35)  # Campaign
+        worksheet.set_column('B:B', 20)  # Source
+        worksheet.set_column('C:C', 15)  # Medium
+        worksheet.set_column('D:D', 12)  # Orders
+        worksheet.set_column('E:E', 15, currency_format)  # Revenue
+        worksheet.set_column('F:F', 12, currency_format)  # AOV
+    
+    output.seek(0)
+    
+    filename = f"attribution_campaigns_{days}d_{datetime.utcnow().strftime('%Y%m%d')}.xlsx"
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers=headers
+    )
+
+
+@router.get("/attribution/export/trend")
+async def export_attribution_trend(
+    session: dict = Depends(verify_shopify_session_token),
+    days: int = Query(default=30, ge=1, le=90, description="Number of days to analyze"),
+    group_by: str = Query(default="day", regex="^(day|week)$", description="Group by day or week")
+):
+    """
+    Export attribution trend data as Excel file.
+    
+    Creates a pivoted view with dates as rows and channels as columns.
+    Includes both Orders and Revenue sheets.
+    """
+    shop_domain = get_shop_from_session(session)
+    
+    async with get_conn() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "SELECT shop_id FROM shopify.shops WHERE shop_domain = %s",
+                (shop_domain,)
+            )
+            shop_row = await cur.fetchone()
+            if not shop_row:
+                raise HTTPException(404, "Shop not found")
+            
+            shop_id = shop_row[0]
+            
+            date_trunc = "day" if group_by == "day" else "week"
+            interval = "1 day" if group_by == "day" else "1 week"
+            
+            await cur.execute(
+                """
+                WITH date_series AS (
+                    SELECT DATE_TRUNC(%s, generate_series(
+                        current_date - %s,
+                        current_date,
+                        %s::interval
+                    ))::date AS period
+                )
+                SELECT 
+                    ds.period,
+                    (o.raw_json->>'landing_site')::text as landing_site,
+                    (o.raw_json->>'source_name')::text as source_name,
+                    (o.raw_json->>'referring_site')::text as referring_site,
+                    COUNT(o.order_id) as orders,
+                    COALESCE(SUM(o.total_price), 0) as revenue
+                FROM date_series ds
+                LEFT JOIN shopify.orders o 
+                    ON DATE_TRUNC(%s, o.created_at)::date = ds.period
+                    AND o.shop_id = %s
+                    AND o.financial_status IN ('paid', 'partially_paid')
+                GROUP BY ds.period, landing_site, source_name, referring_site
+                ORDER BY ds.period ASC
+                """,
+                (date_trunc, days, interval, date_trunc, shop_id)
+            )
+            rows = await cur.fetchall()
+    
+    # Generate all periods
+    all_periods = []
+    current = datetime.now().date()
+    start = current - timedelta(days=days)
+    
+    if group_by == "day":
+        d = start
+        while d <= current:
+            all_periods.append(d.strftime("%Y-%m-%d"))
+            d += timedelta(days=1)
+    else:
+        d = start - timedelta(days=start.weekday())
+        while d <= current:
+            all_periods.append(d.strftime("%Y-%m-%d"))
+            d += timedelta(weeks=1)
+    
+    # Build channel data
+    channels_seen = set()
+    data_by_period_channel = defaultdict(lambda: defaultdict(lambda: {"orders": 0, "revenue": 0.0}))
+    
+    for row in rows:
+        period, landing_site, source_name, referring_site, orders, revenue = row
+        
+        if orders == 0 or period is None:
+            continue
+        
+        utm_data = parse_utm_from_landing_site(landing_site)
+        channel = normalize_channel(
+            utm_data["utm_source"],
+            utm_data["utm_medium"],
+            source_name,
+            referring_site
+        )
+        
+        channels_seen.add(channel)
+        period_str = period.strftime("%Y-%m-%d")
+        data_by_period_channel[period_str][channel]["orders"] += int(orders)
+        data_by_period_channel[period_str][channel]["revenue"] += float(revenue or 0)
+    
+    channels_list = sorted(list(channels_seen))
+    
+    # Build orders DataFrame
+    orders_rows = []
+    for period in all_periods:
+        row_data = {"Date": period}
+        for channel in channels_list:
+            row_data[channel] = data_by_period_channel[period][channel]["orders"]
+        orders_rows.append(row_data)
+    
+    df_orders = pd.DataFrame(orders_rows)
+    
+    # Build revenue DataFrame
+    revenue_rows = []
+    for period in all_periods:
+        row_data = {"Date": period}
+        for channel in channels_list:
+            row_data[channel] = round(data_by_period_channel[period][channel]["revenue"], 2)
+        revenue_rows.append(row_data)
+    
+    df_revenue = pd.DataFrame(revenue_rows)
+    
+    # Build Excel with two sheets
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        df_orders.to_excel(writer, index=False, sheet_name="Orders by Channel")
+        df_revenue.to_excel(writer, index=False, sheet_name="Revenue by Channel")
+        
+        workbook = writer.book
+        
+        # Format orders sheet
+        ws_orders = writer.sheets["Orders by Channel"]
+        ws_orders.set_column('A:A', 12)  # Date
+        for i, channel in enumerate(channels_list):
+            ws_orders.set_column(i + 1, i + 1, max(12, len(channel) + 2))
+        
+        # Format revenue sheet
+        ws_revenue = writer.sheets["Revenue by Channel"]
+        currency_format = workbook.add_format({'num_format': '$#,##0.00'})
+        ws_revenue.set_column('A:A', 12)  # Date
+        for i, channel in enumerate(channels_list):
+            ws_revenue.set_column(i + 1, i + 1, max(12, len(channel) + 2), currency_format)
+    
+    output.seek(0)
+    
+    filename = f"attribution_trend_{group_by}_{days}d_{datetime.utcnow().strftime('%Y%m%d')}.xlsx"
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers=headers
+    )
+
+
+@router.get("/attribution/export/customer-split")
+async def export_attribution_customer_split(
+    session: dict = Depends(verify_shopify_session_token),
+    days: int = Query(default=30, ge=1, le=365, description="Number of days to analyze")
+):
+    """
+    Export new vs repeat customer breakdown by channel as Excel file.
+    
+    Includes: Channel, New Orders, New Revenue, New %, Repeat Orders, Repeat Revenue, Repeat %
+    """
+    shop_domain = get_shop_from_session(session)
+    
+    async with get_conn() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "SELECT shop_id FROM shopify.shops WHERE shop_domain = %s",
+                (shop_domain,)
+            )
+            shop_row = await cur.fetchone()
+            if not shop_row:
+                raise HTTPException(404, "Shop not found")
+            
+            shop_id = shop_row[0]
+            
+            await cur.execute(
+                """
+                SELECT 
+                    (o.raw_json->>'landing_site')::text as landing_site,
+                    (o.raw_json->>'source_name')::text as source_name,
+                    (o.raw_json->>'referring_site')::text as referring_site,
+                    (
+                        SELECT COUNT(*) 
+                        FROM shopify.orders o2 
+                        WHERE o2.shop_id = o.shop_id 
+                          AND o2.customer_id = o.customer_id 
+                          AND o2.customer_id IS NOT NULL
+                          AND o2.created_at <= o.created_at
+                    ) as orders_count_at_purchase,
+                    o.total_price
+                FROM shopify.orders o
+                WHERE o.shop_id = %s
+                  AND o.created_at >= NOW() - make_interval(days => %s)
+                  AND o.financial_status IN ('paid', 'partially_paid')
+                """,
+                (shop_id, days)
+            )
+            orders = await cur.fetchall()
+    
+    # Process by channel and customer type
+    channel_split = defaultdict(lambda: {
+        "new": {"orders": 0, "revenue": 0.0},
+        "repeat": {"orders": 0, "revenue": 0.0}
+    })
+    
+    for order in orders:
+        landing_site, source_name, referring_site, orders_count, total_price = order
+        
+        utm_data = parse_utm_from_landing_site(landing_site)
+        channel = normalize_channel(
+            utm_data["utm_source"],
+            utm_data["utm_medium"],
+            source_name,
+            referring_site
+        )
+        
+        customer_type = get_customer_type(orders_count)
+        type_key = "new" if customer_type == "New" else "repeat"
+        
+        channel_split[channel][type_key]["orders"] += 1
+        channel_split[channel][type_key]["revenue"] += float(total_price or 0)
+    
+    # Build DataFrame
+    rows = []
+    for channel, splits in channel_split.items():
+        total_orders = splits["new"]["orders"] + splits["repeat"]["orders"]
+        new_pct = (splits["new"]["orders"] / total_orders * 100) if total_orders > 0 else 0
+        repeat_pct = (splits["repeat"]["orders"] / total_orders * 100) if total_orders > 0 else 0
+        
+        rows.append({
+            "Channel": channel,
+            "New Orders": splits["new"]["orders"],
+            "New Revenue": round(splits["new"]["revenue"], 2),
+            "New %": round(new_pct, 1),
+            "Repeat Orders": splits["repeat"]["orders"],
+            "Repeat Revenue": round(splits["repeat"]["revenue"], 2),
+            "Repeat %": round(repeat_pct, 1),
+            "Total Orders": total_orders,
+            "Total Revenue": round(splits["new"]["revenue"] + splits["repeat"]["revenue"], 2)
+        })
+    
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df = df.sort_values("Total Orders", ascending=False)
+    
+    # Build Excel
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        df.to_excel(writer, index=False, sheet_name="Customer Split by Channel")
+        
+        workbook = writer.book
+        worksheet = writer.sheets["Customer Split by Channel"]
+        
+        currency_format = workbook.add_format({'num_format': '$#,##0.00'})
+        pct_format = workbook.add_format({'num_format': '0.0%'})
+        
+        worksheet.set_column('A:A', 25)  # Channel
+        worksheet.set_column('B:B', 12)  # New Orders
+        worksheet.set_column('C:C', 15, currency_format)  # New Revenue
+        worksheet.set_column('D:D', 10)  # New %
+        worksheet.set_column('E:E', 14)  # Repeat Orders
+        worksheet.set_column('F:F', 15, currency_format)  # Repeat Revenue
+        worksheet.set_column('G:G', 10)  # Repeat %
+        worksheet.set_column('H:H', 12)  # Total Orders
+        worksheet.set_column('I:I', 15, currency_format)  # Total Revenue
+    
+    output.seek(0)
+    
+    filename = f"attribution_customer_split_{days}d_{datetime.utcnow().strftime('%Y%m%d')}.xlsx"
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers=headers
+    )
