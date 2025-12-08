@@ -66,6 +66,142 @@ def get_cookie(request: Request, name: str) -> Optional[str]:
     return request.cookies.get(name)
 
 
+# ============================================================================
+# SYNC PROGRESS HELPERS
+# ============================================================================
+async def update_sync_progress(
+    shop_id: int,
+    stage: str,
+    status: str = "in_progress",
+    count: int = 0,
+    error: str = None
+):
+    """
+    Update sync progress in database.
+    
+    Args:
+        shop_id: The shop's database ID
+        stage: Current sync stage ('customers', 'products', 'orders', 'line_items')
+        status: Status of the stage ('pending', 'in_progress', 'completed', 'failed')
+        count: Number of items synced for this stage
+        error: Error message if failed
+    """
+    from commerce_app.core.db import get_conn
+    
+    try:
+        async with get_conn() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    UPDATE shopify.shops 
+                    SET 
+                        sync_current_stage = %s,
+                        sync_stage_status = %s,
+                        sync_customers_count = CASE WHEN %s = 'customers' THEN %s ELSE sync_customers_count END,
+                        sync_products_count = CASE WHEN %s = 'products' THEN %s ELSE sync_products_count END,
+                        sync_orders_count = CASE WHEN %s = 'orders' THEN %s ELSE sync_orders_count END,
+                        sync_line_items_count = CASE WHEN %s = 'line_items' THEN %s ELSE sync_line_items_count END,
+                        sync_error = %s,
+                        updated_at = NOW()
+                    WHERE shop_id = %s
+                    """,
+                    (
+                        stage, status,
+                        stage, count,
+                        stage, count,
+                        stage, count,
+                        stage, count,
+                        error,
+                        shop_id
+                    ),
+                )
+                await conn.commit()
+    except Exception as e:
+        print(f"Failed to update sync progress: {e}")
+
+
+async def mark_sync_stage_complete(shop_id: int, stage: str, count: int):
+    """Mark a specific sync stage as completed."""
+    from commerce_app.core.db import get_conn
+    
+    try:
+        async with get_conn() as conn:
+            async with conn.cursor() as cur:
+                # Update the specific stage count and mark as completed
+                if stage == 'customers':
+                    await cur.execute(
+                        "UPDATE shopify.shops SET sync_customers_count = %s, sync_customers_completed = TRUE WHERE shop_id = %s",
+                        (count, shop_id)
+                    )
+                elif stage == 'products':
+                    await cur.execute(
+                        "UPDATE shopify.shops SET sync_products_count = %s, sync_products_completed = TRUE WHERE shop_id = %s",
+                        (count, shop_id)
+                    )
+                elif stage == 'orders':
+                    await cur.execute(
+                        "UPDATE shopify.shops SET sync_orders_count = %s, sync_orders_completed = TRUE, initial_sync_order_count = %s WHERE shop_id = %s",
+                        (count, count, shop_id)
+                    )
+                elif stage == 'line_items':
+                    await cur.execute(
+                        "UPDATE shopify.shops SET sync_line_items_count = %s, sync_line_items_completed = TRUE WHERE shop_id = %s",
+                        (count, shop_id)
+                    )
+                await conn.commit()
+    except Exception as e:
+        print(f"Failed to mark sync stage complete: {e}")
+
+
+async def mark_full_sync_complete(shop_id: int):
+    """Mark the entire sync process as completed."""
+    from commerce_app.core.db import get_conn
+    
+    try:
+        async with get_conn() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    UPDATE shopify.shops 
+                    SET 
+                        initial_sync_status = 'completed',
+                        initial_sync_completed_at = NOW(),
+                        sync_current_stage = 'completed',
+                        sync_stage_status = 'completed'
+                    WHERE shop_id = %s
+                    """,
+                    (shop_id,)
+                )
+                await conn.commit()
+    except Exception as e:
+        print(f"Failed to mark full sync complete: {e}")
+
+
+async def mark_sync_failed(shop_id: int, error_message: str, stage: str = None):
+    """Mark sync as failed in database."""
+    from commerce_app.core.db import get_conn
+    
+    try:
+        async with get_conn() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    UPDATE shopify.shops 
+                    SET 
+                        initial_sync_status = 'failed',
+                        initial_sync_error = %s,
+                        sync_current_stage = %s,
+                        sync_stage_status = 'failed',
+                        sync_error = %s
+                    WHERE shop_id = %s
+                    """,
+                    (error_message, stage or 'unknown', error_message, shop_id)
+                )
+                await conn.commit()
+    except Exception as e:
+        print(f"Failed to mark sync as failed: {e}")
+
+
 async def register_webhooks(shop: str, access_token: str):
     """
     Register webhooks with Shopify after app installation.
@@ -114,24 +250,13 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
     """
     print(f"🔄 Starting bulk initial sync for {shop}")
 
-    # Import here to avoid circular imports
     from commerce_app.core.db import get_conn
     from commerce_app.core.routers.webhooks import process_order_webhook
 
-    # Mark sync as in progress
-    try:
-        async with get_conn() as conn:
-            async with conn.cursor() as cur:
-                await cur.execute(
-                    "UPDATE shopify.shops SET initial_sync_status = 'in_progress' WHERE shop_id = %s",
-                    (shop_id,),
-                )
-                await conn.commit()
-    except Exception as e:
-        print(f"Failed to update sync status: {e}")
+    # Mark orders sync as in progress
+    await update_sync_progress(shop_id, 'orders', 'in_progress', 0)
 
     # Step 1: Start bulk operation
-    # FIXED: Updated to use displayFinancialStatus and displayFulfillmentStatus
     bulk_query = """
     {
       orders {
@@ -184,7 +309,6 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
     }
     """
 
-    # Escape the query for GraphQL mutation
     escaped_query = (
         bulk_query.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
     )
@@ -207,7 +331,6 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
     '''
 
     async with httpx.AsyncClient(timeout=30.0) as client:
-        # Start bulk operation
         try:
             response = await client.post(
                 f"https://{shop}/admin/api/2025-10/graphql.json",
@@ -220,8 +343,8 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
 
             if response.status_code != 200:
                 print(f"Failed to start bulk operation: {response.text}")
-                await mark_sync_failed(shop_id, "Failed to start bulk operation")
-                return
+                await mark_sync_failed(shop_id, "Failed to start bulk operation", "orders")
+                return 0
 
             data = response.json()
 
@@ -232,16 +355,16 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
                 .get("userErrors")
             ):
                 print(f"GraphQL errors: {data}")
-                await mark_sync_failed(shop_id, "GraphQL errors")
-                return
+                await mark_sync_failed(shop_id, "GraphQL errors", "orders")
+                return 0
 
             operation_id = data["data"]["bulkOperationRunQuery"]["bulkOperation"]["id"]
             print(f"✅ Started bulk operation: {operation_id}")
 
         except Exception as e:
             print(f"Error starting bulk operation: {e}")
-            await mark_sync_failed(shop_id, str(e))
-            return
+            await mark_sync_failed(shop_id, str(e), "orders")
+            return 0
 
         # Step 2: Poll until complete
         status_query = """
@@ -261,14 +384,14 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
         """ % operation_id
 
         jsonl_url = None
-        max_wait = 600  # 10 minutes max
+        max_wait = 600
         start_time = asyncio.get_event_loop().time()
 
         while True:
             if asyncio.get_event_loop().time() - start_time > max_wait:
                 print(f"Bulk operation timed out after {max_wait}s")
-                await mark_sync_failed(shop_id, "Timeout")
-                return
+                await mark_sync_failed(shop_id, "Timeout", "orders")
+                return 0
 
             try:
                 response = await client.post(
@@ -302,10 +425,10 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
                     print(
                         f"Bulk operation failed: {status} - {operation.get('errorCode')}"
                     )
-                    jsonl_url = operation.get("partialDataUrl")  # Try partial data
+                    jsonl_url = operation.get("partialDataUrl")
                     break
 
-                await asyncio.sleep(2)  # Check every 2 seconds
+                await asyncio.sleep(2)
 
             except Exception as e:
                 print(f"Error polling bulk operation: {e}")
@@ -314,8 +437,8 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
 
         if not jsonl_url:
             print("No data URL returned from bulk operation")
-            await mark_sync_failed(shop_id, "No data URL")
-            return
+            await mark_sync_failed(shop_id, "No data URL", "orders")
+            return 0
 
         # Step 3: Download and process JSONL file
         print(f"📥 Downloading bulk data from {jsonl_url}")
@@ -324,15 +447,14 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
 
             if response.status_code != 200:
                 print(f"Failed to download bulk data: {response.status_code}")
-                await mark_sync_failed(shop_id, "Download failed")
-                return
+                await mark_sync_failed(shop_id, "Download failed", "orders")
+                return 0
 
         except Exception as e:
             print(f"Error downloading bulk data: {e}")
-            await mark_sync_failed(shop_id, str(e))
-            return
+            await mark_sync_failed(shop_id, str(e), "orders")
+            return 0
 
-        # Process JSONL (newline-delimited JSON)
         lines = response.text.strip().split("\n")
         total_orders = 0
         errors = 0
@@ -346,23 +468,18 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
                     try:
                         item = json.loads(line)
                         
-                        # CRITICAL: Skip non-Order objects (like LineItems)
-                        # Bulk API returns Orders AND LineItems as separate JSONL lines
                         item_id = item.get("id", "")
                         if "/Order/" not in item_id:
-                            continue  # Skip LineItem, Customer, etc.
+                            continue
 
-                        # Extract attribution data from customerJourneySummary
                         journey = item.get("customerJourneySummary", {})
                         first_visit = journey.get("firstVisit", {}) if journey else {}
                         utm_params = first_visit.get("utmParameters", {}) if first_visit else {}
                         
-                        # Build landing_site URL with UTM parameters
                         landing_page = first_visit.get("landingPage", "") if first_visit else None
                         landing_site = None
                         
                         if landing_page and utm_params:
-                            # Reconstruct landing_site with UTM parameters
                             utm_parts = []
                             if utm_params.get("source"):
                                 utm_parts.append(f"utm_source={utm_params['source']}")
@@ -383,11 +500,8 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
                         elif landing_page:
                             landing_site = landing_page
                         
-                        # Convert GraphQL format to REST format for process_order_webhook
                         rest_format_order = {
-                            "id": item.get("id", "").split("/")[
-                                -1
-                            ],  # Extract numeric ID from gid://
+                            "id": item.get("id", "").split("/")[-1],
                             "name": item.get("name"),
                             "order_number": item.get("name", "").replace("#", ""),
                             "email": item.get("email"),
@@ -404,9 +518,7 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
                             .get("shopMoney", {})
                             .get("currencyCode", "USD"),
                             "financial_status": item.get("displayFinancialStatus"),
-                            "fulfillment_status": item.get(
-                                "displayFulfillmentStatus"
-                            ),
+                            "fulfillment_status": item.get("displayFulfillmentStatus"),
                             "created_at": item.get("createdAt"),
                             "updated_at": item.get("updatedAt"),
                             "customer": {
@@ -422,37 +534,18 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
                         await process_order_webhook(cur, shop_id, rest_format_order)
                         total_orders += 1
 
-                        # Commit in batches of 100 for performance and update progress
                         if total_orders % 100 == 0:
                             await conn.commit()
                             print(f"📦 Processed {total_orders} orders...")
-
-                            # Update progress in database
-                            await cur.execute(
-                                "UPDATE shopify.shops SET initial_sync_order_count = %s WHERE shop_id = %s",
-                                (total_orders, shop_id),
-                            )
-                            await conn.commit()
+                            await update_sync_progress(shop_id, 'orders', 'in_progress', total_orders)
 
                     except Exception as e:
                         print(f"Error processing order line: {e}")
                         errors += 1
                         continue
 
-                # Final commit
                 await conn.commit()
 
-                # Mark sync as complete
-                await cur.execute(
-                    """UPDATE shopify.shops 
-                       SET initial_sync_status = 'completed',
-                           initial_sync_completed_at = NOW(),
-                           initial_sync_order_count = %s
-                       WHERE shop_id = %s""",
-                    (total_orders, shop_id),
-                )
-                await conn.commit()
-                
                 # Update customer total_spent based on actual orders
                 print(f"📊 Calculating customer total_spent from orders...")
                 await cur.execute(
@@ -478,25 +571,25 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
                 await conn.commit()
                 print(f"✅ Updated total_spent for {updated_count} customers based on orders")
 
-        print(
-            f"✅ Bulk sync complete for {shop}: {total_orders} orders imported ({errors} errors)"
-        )
+        # Mark orders stage as complete
+        await mark_sync_stage_complete(shop_id, 'orders', total_orders)
+        print(f"✅ Bulk sync complete for {shop}: {total_orders} orders imported ({errors} errors)")
+        
+        return total_orders
 
 
-# ============================================================================
-# NEW FUNCTION: Product Sync using Bulk Operations API
-# ============================================================================
 async def sync_products(shop: str, shop_id: int, access_token: str):
     """
     Fetch ALL products and variants using Shopify Bulk Operations API (GraphQL).
-    Much faster than REST pagination - no rate limits!
     """
     print(f"🔄 Starting bulk product sync for {shop}")
 
     from commerce_app.core.db import get_conn
     from commerce_app.core.routers.webhooks import process_product_webhook
 
-    # FIXED: Removed weight/weightUnit from variant, added to inventoryItem
+    # Mark products sync as in progress
+    await update_sync_progress(shop_id, 'products', 'in_progress', 0)
+
     bulk_query = """
     {
       products {
@@ -550,7 +643,6 @@ async def sync_products(shop: str, shop_id: int, access_token: str):
     }
     """
 
-    # Escape for GraphQL mutation
     escaped_query = (
         bulk_query.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
     )
@@ -565,7 +657,6 @@ async def sync_products(shop: str, shop_id: int, access_token: str):
     '''
 
     async with httpx.AsyncClient(timeout=30.0) as client:
-        # Start bulk operation
         try:
             response = await client.post(
                 f"https://{shop}/admin/api/2025-10/graphql.json",
@@ -578,7 +669,8 @@ async def sync_products(shop: str, shop_id: int, access_token: str):
 
             if response.status_code != 200:
                 print(f"Failed to start product bulk operation: {response.text}")
-                return
+                await update_sync_progress(shop_id, 'products', 'failed', 0, "Failed to start bulk operation")
+                return 0
 
             data = response.json()
 
@@ -589,14 +681,16 @@ async def sync_products(shop: str, shop_id: int, access_token: str):
                 .get("userErrors")
             ):
                 print(f"GraphQL errors: {data}")
-                return
+                await update_sync_progress(shop_id, 'products', 'failed', 0, "GraphQL errors")
+                return 0
 
             operation_id = data["data"]["bulkOperationRunQuery"]["bulkOperation"]["id"]
             print(f"✅ Started product bulk operation: {operation_id}")
 
         except Exception as e:
             print(f"Error starting product bulk operation: {e}")
-            return
+            await update_sync_progress(shop_id, 'products', 'failed', 0, str(e))
+            return 0
 
         # Poll for completion
         status_query = """
@@ -615,13 +709,14 @@ async def sync_products(shop: str, shop_id: int, access_token: str):
         """ % operation_id
 
         jsonl_url = None
-        max_wait = 600  # 10 minutes
+        max_wait = 600
         start_time = asyncio.get_event_loop().time()
 
         while True:
             if asyncio.get_event_loop().time() - start_time > max_wait:
                 print("Product bulk operation timed out")
-                return
+                await update_sync_progress(shop_id, 'products', 'failed', 0, "Timeout")
+                return 0
 
             await asyncio.sleep(2)
 
@@ -661,7 +756,8 @@ async def sync_products(shop: str, shop_id: int, access_token: str):
 
         if not jsonl_url:
             print("No product data URL")
-            return
+            await update_sync_progress(shop_id, 'products', 'failed', 0, "No data URL")
+            return 0
 
         # Download and process
         print("📥 Downloading product data...")
@@ -670,16 +766,17 @@ async def sync_products(shop: str, shop_id: int, access_token: str):
 
             if response.status_code != 200:
                 print(f"Failed to download product data: {response.status_code}")
-                return
+                await update_sync_progress(shop_id, 'products', 'failed', 0, "Download failed")
+                return 0
 
         except Exception as e:
             print(f"Error downloading product data: {e}")
-            return
+            await update_sync_progress(shop_id, 'products', 'failed', 0, str(e))
+            return 0
 
         lines = response.text.strip().split("\n")
         products_map = {}
 
-        # Parse JSONL - group products with their variants
         for line in lines:
             if not line.strip():
                 continue
@@ -705,7 +802,6 @@ async def sync_products(shop: str, shop_id: int, access_token: str):
                 elif "/ProductVariant/" in item_id:
                     parent_id = item.get("__parentId", "").split("/")[-1]
                     if parent_id in products_map:
-                        # FIXED: Get weight from inventoryItem.measurement.weight
                         inventory_item = item.get("inventoryItem", {})
                         measurement = inventory_item.get("measurement", {})
                         weight_data = measurement.get("weight", {})
@@ -727,12 +823,10 @@ async def sync_products(shop: str, shop_id: int, access_token: str):
                             "inventoryQuantity": item.get("inventoryQuantity"),
                         }
 
-                        # Parse selectedOptions into option1, option2, option3
                         selected_options = item.get("selectedOptions", [])
                         for i, opt in enumerate(selected_options[:3], 1):
                             variant_data[f"option{i}"] = opt.get("value")
 
-                        # Parse inventoryItem data
                         if inventory_item:
                             variant_data["inventoryItemId"] = (
                                 inventory_item.get("id", "").split("/")[-1]
@@ -749,7 +843,6 @@ async def sync_products(shop: str, shop_id: int, access_token: str):
                 print(f"Error parsing product line: {e}")
                 continue
 
-        # Save to database
         total_products = 0
         total_variants = 0
         errors = 0
@@ -764,36 +857,30 @@ async def sync_products(shop: str, shop_id: int, access_token: str):
 
                         if total_products % 50 == 0:
                             await conn.commit()
-                            print(
-                                f"📦 Processed {total_products} products, {total_variants} variants..."
-                            )
+                            print(f"📦 Processed {total_products} products, {total_variants} variants...")
+                            await update_sync_progress(shop_id, 'products', 'in_progress', total_products)
                     except Exception as e:
-                        print(
-                            f"Error processing product {product_data.get('id')}: {e}"
-                        )
+                        print(f"Error processing product {product_data.get('id')}: {e}")
                         errors += 1
                         continue
 
                 await conn.commit()
 
-        print(
-            f"✅ Product sync complete: {total_products} products, {total_variants} variants ({errors} errors)"
-        )
+        # Mark products stage as complete
+        await mark_sync_stage_complete(shop_id, 'products', total_products)
+        print(f"✅ Product sync complete: {total_products} products, {total_variants} variants ({errors} errors)")
+        
+        return total_products
 
 
-# ============================================================================
-# NEW FUNCTION: Product Variants Only Sync
-# ============================================================================
 async def sync_product_variants(shop: str, shop_id: int, access_token: str):
     """
     Fetch ALL product variants using Shopify Bulk Operations API (GraphQL).
-    Useful for updating variant-specific data like inventory and pricing.
     """
     print(f"🔄 Starting bulk product variants sync for {shop}")
 
     from commerce_app.core.db import get_conn
 
-    # FIXED: Removed weight/weightUnit from variant, added to inventoryItem
     bulk_query = """
     {
       productVariants {
@@ -849,7 +936,6 @@ async def sync_product_variants(shop: str, shop_id: int, access_token: str):
     '''
 
     async with httpx.AsyncClient(timeout=30.0) as client:
-        # Start bulk operation
         try:
             response = await client.post(
                 f"https://{shop}/admin/api/2025-10/graphql.json",
@@ -882,7 +968,6 @@ async def sync_product_variants(shop: str, shop_id: int, access_token: str):
             print(f"Error starting variant bulk operation: {e}")
             return
 
-        # Poll for completion
         status_query = """
         query {
           node(id: "%s") {
@@ -926,9 +1011,7 @@ async def sync_product_variants(shop: str, shop_id: int, access_token: str):
                 operation = data.get("data", {}).get("node", {})
                 status = operation.get("status")
 
-                print(
-                    f"📊 Variant sync status: {status} ({operation.get('objectCount', 0)} objects)"
-                )
+                print(f"📊 Variant sync status: {status} ({operation.get('objectCount', 0)} objects)")
 
                 if status == "COMPLETED":
                     jsonl_url = operation.get("url")
@@ -947,7 +1030,6 @@ async def sync_product_variants(shop: str, shop_id: int, access_token: str):
             print("No variant data URL")
             return
 
-        # Download and process
         print("📥 Downloading variant data...")
         try:
             response = await client.get(jsonl_url, timeout=120.0)
@@ -977,7 +1059,6 @@ async def sync_product_variants(shop: str, shop_id: int, access_token: str):
                             variant.get("product", {}).get("id", "").split("/")[-1]
                         )
 
-                        # Parse selectedOptions
                         selected_options = variant.get("selectedOptions", [])
                         option1 = (
                             selected_options[0].get("value")
@@ -995,7 +1076,6 @@ async def sync_product_variants(shop: str, shop_id: int, access_token: str):
                             else None
                         )
 
-                        # FIXED: Parse weight from inventoryItem.measurement.weight
                         inventory_item = variant.get("inventoryItem", {})
                         measurement = inventory_item.get("measurement", {})
                         weight_data = measurement.get("weight", {})
@@ -1012,7 +1092,6 @@ async def sync_product_variants(shop: str, shop_id: int, access_token: str):
                         )
                         requires_shipping = inventory_item.get("requiresShipping")
 
-                        # Update variant in database
                         await cur.execute(
                             """
                             INSERT INTO shopify.product_variants (
@@ -1086,25 +1165,20 @@ async def sync_product_variants(shop: str, shop_id: int, access_token: str):
 
                 await conn.commit()
 
-        print(
-            f"✅ Variant sync complete: {total_variants} variants ({errors} errors)"
-        )
+        print(f"✅ Variant sync complete: {total_variants} variants ({errors} errors)")
 
-# ============================================================================
-# NEW FUNCTION: Customer Sync using Bulk Operations API
-# ============================================================================
+
 async def sync_customers(shop: str, shop_id: int, access_token: str):
     """
-    Extract customers from orders data instead of using bulk operations.
-    
-    This avoids ACCESS_DENIED errors for protected customer data.
-    Customers are populated as orders are processed.
+    Extract customers using Shopify REST API with cursor-based pagination.
     """
     print(f"🔄 Starting customer extraction for {shop}")
 
     from commerce_app.core.db import get_conn
 
-    # Fetch customers from Shopify REST API using cursor-based pagination
+    # Mark customers sync as in progress
+    await update_sync_progress(shop_id, 'customers', 'in_progress', 0)
+
     async with httpx.AsyncClient(timeout=30.0) as client:
         total_customers = 0
         page_info = None
@@ -1113,12 +1187,10 @@ async def sync_customers(shop: str, shop_id: int, access_token: str):
             async with conn.cursor() as cur:
                 while True:
                     try:
-                        # Build URL with cursor if available
                         params = {"limit": 250}
                         if page_info:
                             params["page_info"] = page_info
                         
-                        # Fetch a page of customers
                         response = await client.get(
                             f"https://{shop}/admin/api/2025-10/customers.json",
                             headers={"X-Shopify-Access-Token": access_token},
@@ -1136,7 +1208,6 @@ async def sync_customers(shop: str, shop_id: int, access_token: str):
                             print(f"✅ No more customers to fetch")
                             break
                         
-                        # Process this batch
                         for customer in customers:
                             try:
                                 customer_id = customer.get("id")
@@ -1172,7 +1243,7 @@ async def sync_customers(shop: str, shop_id: int, access_token: str):
                                         customer.get("created_at"),
                                         customer.get("updated_at"),
                                         customer.get("phone"),
-                                        0.0,  # Will be calculated from orders
+                                        0.0,
                                         int(customer.get("orders_count", 0)),
                                         customer.get("state", "disabled"),
                                         json.dumps(customer),
@@ -1187,11 +1258,11 @@ async def sync_customers(shop: str, shop_id: int, access_token: str):
                         await conn.commit()
                         print(f"👥 Processed {total_customers} customers...")
                         
-                        # Check Link header for next page
+                        # Update progress
+                        await update_sync_progress(shop_id, 'customers', 'in_progress', total_customers)
+                        
                         link_header = response.headers.get("Link", "")
                         if 'rel="next"' in link_header:
-                            # Extract page_info from Link header
-                            # Format: <https://shop.myshopify.com/admin/api/2025-10/customers.json?page_info=xxxxx>; rel="next"
                             import re
                             match = re.search(r'page_info=([^>&]+)', link_header)
                             if match:
@@ -1199,10 +1270,9 @@ async def sync_customers(shop: str, shop_id: int, access_token: str):
                             else:
                                 break
                         else:
-                            # No more pages
                             break
                         
-                        await asyncio.sleep(0.5)  # Rate limit protection
+                        await asyncio.sleep(0.5)
                         
                     except Exception as e:
                         print(f"Error fetching customers: {e}")
@@ -1210,20 +1280,23 @@ async def sync_customers(shop: str, shop_id: int, access_token: str):
                         traceback.print_exc()
                         break
 
+    # Mark customers stage as complete
+    await mark_sync_stage_complete(shop_id, 'customers', total_customers)
     print(f"✅ Customer extraction complete: {total_customers} customers imported")
+    
+    return total_customers
 
 
-# ============================================================================
-# NEW FUNCTION: Order Line Items Sync
-# ============================================================================
 async def sync_order_line_items(shop: str, shop_id: int, access_token: str):
     """
     Fetch ALL order line items using Shopify Bulk Operations API (GraphQL).
-    Useful for detailed order analysis and profitability calculations.
     """
     print(f"🔄 Starting bulk order line items sync for {shop}")
 
     from commerce_app.core.db import get_conn
+
+    # Mark line_items sync as in progress
+    await update_sync_progress(shop_id, 'line_items', 'in_progress', 0)
 
     bulk_query = """
     {
@@ -1296,7 +1369,6 @@ async def sync_order_line_items(shop: str, shop_id: int, access_token: str):
     '''
 
     async with httpx.AsyncClient(timeout=30.0) as client:
-        # Start bulk operation
         try:
             response = await client.post(
                 f"https://{shop}/admin/api/2025-10/graphql.json",
@@ -1309,7 +1381,8 @@ async def sync_order_line_items(shop: str, shop_id: int, access_token: str):
 
             if response.status_code != 200:
                 print(f"Failed to start line items bulk operation: {response.text}")
-                return
+                await update_sync_progress(shop_id, 'line_items', 'failed', 0, "Failed to start bulk operation")
+                return 0
 
             data = response.json()
 
@@ -1320,16 +1393,17 @@ async def sync_order_line_items(shop: str, shop_id: int, access_token: str):
                 .get("userErrors")
             ):
                 print(f"GraphQL errors: {data}")
-                return
+                await update_sync_progress(shop_id, 'line_items', 'failed', 0, "GraphQL errors")
+                return 0
 
             operation_id = data["data"]["bulkOperationRunQuery"]["bulkOperation"]["id"]
             print(f"✅ Started line items bulk operation: {operation_id}")
 
         except Exception as e:
             print(f"Error starting line items bulk operation: {e}")
-            return
+            await update_sync_progress(shop_id, 'line_items', 'failed', 0, str(e))
+            return 0
 
-        # Poll for completion
         status_query = """
         query {
           node(id: "%s") {
@@ -1352,7 +1426,8 @@ async def sync_order_line_items(shop: str, shop_id: int, access_token: str):
         while True:
             if asyncio.get_event_loop().time() - start_time > max_wait:
                 print("Line items bulk operation timed out")
-                return
+                await update_sync_progress(shop_id, 'line_items', 'failed', 0, "Timeout")
+                return 0
 
             await asyncio.sleep(2)
 
@@ -1373,9 +1448,7 @@ async def sync_order_line_items(shop: str, shop_id: int, access_token: str):
                 operation = data.get("data", {}).get("node", {})
                 status = operation.get("status")
 
-                print(
-                    f"📊 Line items sync status: {status} ({operation.get('objectCount', 0)} objects)"
-                )
+                print(f"📊 Line items sync status: {status} ({operation.get('objectCount', 0)} objects)")
 
                 if status == "COMPLETED":
                     jsonl_url = operation.get("url")
@@ -1392,27 +1465,26 @@ async def sync_order_line_items(shop: str, shop_id: int, access_token: str):
 
         if not jsonl_url:
             print("No line items data URL")
-            return
+            await update_sync_progress(shop_id, 'line_items', 'failed', 0, "No data URL")
+            return 0
 
-        # Download and process
         print("📥 Downloading line items data...")
         try:
             response = await client.get(jsonl_url, timeout=120.0)
 
             if response.status_code != 200:
-                print(
-                    f"Failed to download line items data: {response.status_code}"
-                )
-                return
+                print(f"Failed to download line items data: {response.status_code}")
+                await update_sync_progress(shop_id, 'line_items', 'failed', 0, "Download failed")
+                return 0
 
         except Exception as e:
             print(f"Error downloading line items data: {e}")
-            return
+            await update_sync_progress(shop_id, 'line_items', 'failed', 0, str(e))
+            return 0
 
         lines = response.text.strip().split("\n")
         orders_map = {}
 
-        # Parse JSONL - group line items with their orders
         for line in lines:
             if not line.strip():
                 continue
@@ -1437,7 +1509,6 @@ async def sync_order_line_items(shop: str, shop_id: int, access_token: str):
                 print(f"Error parsing line item: {e}")
                 continue
 
-        # Save to database
         total_line_items = 0
         errors = 0
 
@@ -1465,7 +1536,6 @@ async def sync_order_line_items(shop: str, shop_id: int, access_token: str):
                                 else None
                             )
 
-                            # Parse pricing - calculate discount
                             original_total = float(
                                 line_item.get("originalTotalSet", {})
                                 .get("shopMoney", {})
@@ -1478,7 +1548,6 @@ async def sync_order_line_items(shop: str, shop_id: int, access_token: str):
                             )
                             total_discount = original_total - discounted_total
 
-                            # Use discounted unit price as the "price"
                             unit_price = (
                                 line_item.get("discountedUnitPriceSet", {})
                                 .get("shopMoney", {})
@@ -1506,7 +1575,7 @@ async def sync_order_line_items(shop: str, shop_id: int, access_token: str):
                                 (
                                     shop_id,
                                     int(order_id),
-                                    line_number,  # Use counter instead of line_item_id
+                                    line_number,
                                     int(product_id) if product_id else None,
                                     int(variant_id) if variant_id else None,
                                     line_item.get("title"),
@@ -1522,18 +1591,21 @@ async def sync_order_line_items(shop: str, shop_id: int, access_token: str):
                             if total_line_items % 100 == 0:
                                 await conn.commit()
                                 print(f"📦 Processed {total_line_items} line items...")
+                                await update_sync_progress(shop_id, 'line_items', 'in_progress', total_line_items)
 
                         except Exception as e:
                             print(f"Error processing line item: {e}")
                             errors += 1
-                            await conn.rollback()  # Rollback failed transaction
+                            await conn.rollback()
                             continue
 
                 await conn.commit()
 
-        print(
-            f"✅ Line items sync complete: {total_line_items} line items ({errors} errors)"
-        )
+    # Mark line_items stage as complete
+    await mark_sync_stage_complete(shop_id, 'line_items', total_line_items)
+    print(f"✅ Line items sync complete: {total_line_items} line items ({errors} errors)")
+    
+    return total_line_items
 
 
 # ============================================================================
@@ -1550,54 +1622,37 @@ async def run_sequential_sync(shop: str, shop_id: int, access_token: str):
     4. Line items (depends on orders existing)
     """
     try:
-        # 1. Customers FIRST - orders have foreign keys to customers
+        # 1. Customers FIRST
         print(f"🔄 [1/4] Starting customer sync for {shop}")
-        await sync_customers(shop, shop_id, access_token)
-        print(f"✅ [1/4] Customer sync complete for {shop}")
+        customers_count = await sync_customers(shop, shop_id, access_token)
+        print(f"✅ [1/4] Customer sync complete for {shop}: {customers_count} customers")
         
-        # 2. Products - independent of customers
+        # 2. Products
         print(f"🔄 [2/4] Starting product sync for {shop}")
-        await sync_products(shop, shop_id, access_token)
-        print(f"✅ [2/4] Product sync complete for {shop}")
+        products_count = await sync_products(shop, shop_id, access_token)
+        print(f"✅ [2/4] Product sync complete for {shop}: {products_count} products")
         
-        # 3. Orders - NOW customers exist, can reference them safely
+        # 3. Orders
         print(f"🔄 [3/4] Starting order sync for {shop}")
-        await initial_data_sync(shop, shop_id, access_token)
-        print(f"✅ [3/4] Order sync complete for {shop}")
+        orders_count = await initial_data_sync(shop, shop_id, access_token)
+        print(f"✅ [3/4] Order sync complete for {shop}: {orders_count} orders")
         
-        # 4. Line items - depends on orders existing
+        # 4. Line items
         print(f"🔄 [4/4] Starting line items sync for {shop}")
-        await sync_order_line_items(shop, shop_id, access_token)
-        print(f"✅ [4/4] Line items sync complete for {shop}")
+        line_items_count = await sync_order_line_items(shop, shop_id, access_token)
+        print(f"✅ [4/4] Line items sync complete for {shop}: {line_items_count} line items")
+        
+        # Mark full sync as complete
+        await mark_full_sync_complete(shop_id)
         
         print(f"🎉 All syncs completed successfully for {shop}")
+        print(f"   📊 Summary: {customers_count} customers, {products_count} products, {orders_count} orders, {line_items_count} line items")
         
     except Exception as e:
         print(f"❌ Error during sequential sync for {shop}: {e}")
         import traceback
         traceback.print_exc()
-
-
-# ============================================================================
-# Helper function
-# ============================================================================
-async def mark_sync_failed(shop_id: int, error_message: str):
-    """Mark initial sync as failed in database."""
-    try:
-        from commerce_app.core.db import get_conn
-
-        async with get_conn() as conn:
-            async with conn.cursor() as cur:
-                await cur.execute(
-                    """UPDATE shopify.shops 
-                       SET initial_sync_status = 'failed',
-                           initial_sync_error = %s
-                       WHERE shop_id = %s""",
-                    (error_message, shop_id),
-                )
-                await conn.commit()
-    except Exception as e:
-        print(f"Failed to mark sync as failed: {e}")
+        await mark_sync_failed(shop_id, str(e))
 
 
 # ============================================================================
@@ -1607,13 +1662,6 @@ async def mark_sync_failed(shop_id: int, error_message: str):
 async def auth_check(shop: str):
     """
     Simple check to see if we have an access token stored for this shop.
-
-    Used by the frontend AuthGate to decide whether to redirect the merchant
-    to /auth/start (OAuth) or go straight into the embedded app.
-
-    Returns:
-      200 + {"ok": True} if the shop exists and has an access token
-      401 if no access token is stored
     """
     if not is_valid_shop(shop):
         raise HTTPException(status_code=400, detail="Invalid shop parameter")
@@ -1629,7 +1677,6 @@ async def auth_check(shop: str):
     if row and row.get("access_token"):
         return {"ok": True}
 
-    # No token yet → frontend should send merchant through /auth/start
     raise HTTPException(status_code=401, detail="No access token for shop")
 
 
@@ -1688,7 +1735,6 @@ async def top_level_bounce(request: Request, shop: str, state: str):
 
 @router.get("/callback")
 async def auth_callback(request: Request, background_tasks: BackgroundTasks):
-    # Parse query
     qp = dict(request.query_params)
     hmac_ok = verify_hmac(SHOPIFY_API_SECRET, qp)
     if not hmac_ok:
@@ -1704,7 +1750,6 @@ async def auth_callback(request: Request, background_tasks: BackgroundTasks):
     if not cookie_state or cookie_state != state:
         raise HTTPException(status_code=400, detail="State mismatch")
 
-    # Check if we already have this shop installed recently
     conn = db()
     with conn, conn.cursor() as cur:
         cur.execute(
@@ -1717,7 +1762,6 @@ async def auth_callback(request: Request, background_tasks: BackgroundTasks):
         )
         existing_shop = cur.fetchone()
 
-        # If shop was updated in last 30 seconds, skip token exchange (already done)
         if existing_shop and existing_shop["updated_at"]:
             from datetime import datetime, timezone, timedelta
 
@@ -1727,11 +1771,9 @@ async def auth_callback(request: Request, background_tasks: BackgroundTasks):
                 print(
                     f"⚠️  Shop {shop} already installed recently, skipping duplicate callback"
                 )
-                # Skip to redirect
                 redirect_url = f"https://{shop}/admin/apps/{SHOPIFY_API_KEY}"
                 return RedirectResponse(url=redirect_url, status_code=302)
 
-    # Exchange code -> token (ONLY ONCE!)
     token_url = f"https://{shop}/admin/oauth/access_token"
     payload = {
         "client_id": SHOPIFY_API_KEY,
@@ -1740,7 +1782,6 @@ async def auth_callback(request: Request, background_tasks: BackgroundTasks):
     }
 
     async with httpx.AsyncClient(timeout=20.0) as client:
-        # Get access token
         r = await client.post(token_url, json=payload)
         if r.status_code != 200:
             raise HTTPException(
@@ -1754,7 +1795,6 @@ async def auth_callback(request: Request, background_tasks: BackgroundTasks):
         print(f"🔍 GRANTED SCOPES: {scope}")
         print(f"🔍 TOKEN RESPONSE: {json.dumps(data, indent=2)}")
 
-        # Fetch shop details
         shop_info_response = await client.get(
             f"https://{shop}/admin/api/2025-10/shop.json",
             headers={"X-Shopify-Access-Token": access_token},
@@ -1766,7 +1806,6 @@ async def auth_callback(request: Request, background_tasks: BackgroundTasks):
         else:
             shop_name = ""
 
-    # Upsert shop record
     conn = db()
     with conn, conn.cursor() as cur:
         try:
@@ -1779,23 +1818,43 @@ async def auth_callback(request: Request, background_tasks: BackgroundTasks):
                     access_scope, 
                     installed_at, 
                     updated_at,
-                    initial_sync_status
+                    initial_sync_status,
+                    sync_current_stage,
+                    sync_stage_status,
+                    sync_customers_count,
+                    sync_products_count,
+                    sync_orders_count,
+                    sync_line_items_count,
+                    sync_customers_completed,
+                    sync_products_completed,
+                    sync_orders_completed,
+                    sync_line_items_completed
                 )
-                VALUES (%s, %s, %s, %s, now(), now(), 'pending')
+                VALUES (%s, %s, %s, %s, now(), now(), 'pending', 'customers', 'pending', 0, 0, 0, 0, FALSE, FALSE, FALSE, FALSE)
                 ON CONFLICT (shop_domain)
                 DO UPDATE SET 
                     shop_name = EXCLUDED.shop_name,
                     access_token = EXCLUDED.access_token,
                     access_scope = EXCLUDED.access_scope,
                     updated_at = now(),
-                    initial_sync_status = 'pending'
+                    initial_sync_status = 'pending',
+                    sync_current_stage = 'customers',
+                    sync_stage_status = 'pending',
+                    sync_customers_count = 0,
+                    sync_products_count = 0,
+                    sync_orders_count = 0,
+                    sync_line_items_count = 0,
+                    sync_customers_completed = FALSE,
+                    sync_products_completed = FALSE,
+                    sync_orders_completed = FALSE,
+                    sync_line_items_completed = FALSE,
+                    sync_error = NULL
                 RETURNING shop_id;
                 """,
                 (shop, shop_name, access_token, scope),
             )
             shop_id = cur.fetchone()["shop_id"]
         except Exception as e:
-            # If insert fails, try to get existing shop_id
             print(f"⚠️  Insert failed, fetching existing shop: {e}")
             conn.rollback()
             cur.execute(
@@ -1807,20 +1866,16 @@ async def auth_callback(request: Request, background_tasks: BackgroundTasks):
             if not shop_id:
                 raise HTTPException(status_code=500, detail="Failed to save shop")
 
-    # Register webhooks and queue SEQUENTIAL sync
     try:
         await register_webhooks(shop, access_token)
         print(f"✅ Webhooks registered for {shop}")
 
-        # Run SEQUENTIAL sync in background (all syncs will run in order)
         background_tasks.add_task(run_sequential_sync, shop, shop_id, access_token)
         print(f"📋 Sequential bulk sync queued for {shop} (customers→products→orders→line_items)")
 
     except Exception as e:
         print(f"❌ Failed setup for {shop}: {e}")
-        # Don't fail auth flow - merchant is still installed
 
-    # Redirect to Shopify admin apps page
     redirect_url = f"https://{shop}/admin/apps/{SHOPIFY_API_KEY}"
     return RedirectResponse(url=redirect_url, status_code=302)
 
@@ -1828,8 +1883,8 @@ async def auth_callback(request: Request, background_tasks: BackgroundTasks):
 @router.get("/sync-status/{shop_domain}")
 async def sync_status(shop_domain: str):
     """
-    Check initial sync progress.
-    Useful for displaying sync status in your app UI.
+    Check initial sync progress with detailed stage information.
+    Returns current stage, counts for each stage, and completion status.
     """
     from commerce_app.core.db import get_conn
 
@@ -1837,10 +1892,21 @@ async def sync_status(shop_domain: str):
         async with conn.cursor() as cur:
             await cur.execute(
                 """SELECT 
-                    initial_sync_status, 
-                    initial_sync_order_count, 
+                    initial_sync_status,
                     initial_sync_completed_at,
-                    initial_sync_error
+                    initial_sync_error,
+                    sync_current_stage,
+                    sync_stage_status,
+                    sync_customers_count,
+                    sync_products_count,
+                    sync_orders_count,
+                    sync_line_items_count,
+                    sync_customers_completed,
+                    sync_products_completed,
+                    sync_orders_completed,
+                    sync_line_items_completed,
+                    sync_error,
+                    initial_sync_order_count
                    FROM shopify.shops 
                    WHERE shop_domain = %s""",
                 (shop_domain,),
@@ -1850,11 +1916,49 @@ async def sync_status(shop_domain: str):
             if not row:
                 return {"status": "not_found"}
 
+            # Calculate overall progress percentage
+            stages_completed = sum([
+                1 if row[9] else 0,   # sync_customers_completed
+                1 if row[10] else 0,  # sync_products_completed
+                1 if row[11] else 0,  # sync_orders_completed
+                1 if row[12] else 0,  # sync_line_items_completed
+            ])
+            
+            # If currently syncing, add partial progress for current stage
+            current_stage = row[3]
+            stage_status = row[4]
+            
+            if stage_status == 'in_progress':
+                # Add partial progress (0.5 for in-progress stage)
+                progress_percent = (stages_completed + 0.5) / 4 * 100
+            else:
+                progress_percent = stages_completed / 4 * 100
+
             return {
-                "status": row[0],
-                "orders_synced": row[1] or 0,
-                "completed_at": row[2].isoformat() if row[2] else None,
-                "error": row[3],
+                "status": row[0],  # initial_sync_status
+                "completed_at": row[1].isoformat() if row[1] else None,
+                "error": row[2] or row[13],  # initial_sync_error or sync_error
+                
+                # Detailed stage information
+                "current_stage": current_stage,
+                "stage_status": stage_status,
+                
+                # Counts for each stage
+                "customers_synced": row[5] or 0,
+                "products_synced": row[6] or 0,
+                "orders_synced": row[7] or row[14] or 0,  # Also check initial_sync_order_count
+                "line_items_synced": row[8] or 0,
+                
+                # Completion flags
+                "customers_completed": row[9] or False,
+                "products_completed": row[10] or False,
+                "orders_completed": row[11] or False,
+                "line_items_completed": row[12] or False,
+                
+                # Overall progress
+                "progress_percent": progress_percent,
+                "stages_completed": stages_completed,
+                "total_stages": 4,
             }
 
 
@@ -1865,10 +1969,7 @@ async def sync_status(shop_domain: str):
 async def trigger_customer_sync(
     shop_domain: str, background_tasks: BackgroundTasks
 ):
-    """
-    Manually trigger a customer sync for a shop.
-    Useful for backfilling missing customers or re-syncing.
-    """
+    """Manually trigger a customer sync for a shop."""
     conn = db()
     with conn, conn.cursor() as cur:
         cur.execute(
@@ -1883,10 +1984,7 @@ async def trigger_customer_sync(
         shop_id = row["shop_id"]
         access_token = row["access_token"]
 
-    # Run sync in background
-    background_tasks.add_task(
-        sync_customers, shop_domain, shop_id, access_token
-    )
+    background_tasks.add_task(sync_customers, shop_domain, shop_id, access_token)
 
     return {
         "status": "started",
@@ -1898,10 +1996,7 @@ async def trigger_customer_sync(
 async def trigger_product_sync(
     shop_domain: str, background_tasks: BackgroundTasks
 ):
-    """
-    Manually trigger a product sync for a shop.
-    Useful for backfilling missing products or re-syncing.
-    """
+    """Manually trigger a product sync for a shop."""
     conn = db()
     with conn, conn.cursor() as cur:
         cur.execute(
@@ -1916,10 +2011,7 @@ async def trigger_product_sync(
         shop_id = row["shop_id"]
         access_token = row["access_token"]
 
-    # Run sync in background
-    background_tasks.add_task(
-        sync_products, shop_domain, shop_id, access_token
-    )
+    background_tasks.add_task(sync_products, shop_domain, shop_id, access_token)
 
     return {
         "status": "started",
@@ -1931,10 +2023,7 @@ async def trigger_product_sync(
 async def trigger_variant_sync(
     shop_domain: str, background_tasks: BackgroundTasks
 ):
-    """
-    Manually trigger a product variants sync for a shop.
-    Useful for updating variant-specific data like inventory and pricing.
-    """
+    """Manually trigger a product variants sync for a shop."""
     conn = db()
     with conn, conn.cursor() as cur:
         cur.execute(
@@ -1949,10 +2038,7 @@ async def trigger_variant_sync(
         shop_id = row["shop_id"]
         access_token = row["access_token"]
 
-    # Run sync in background
-    background_tasks.add_task(
-        sync_product_variants, shop_domain, shop_id, access_token
-    )
+    background_tasks.add_task(sync_product_variants, shop_domain, shop_id, access_token)
 
     return {
         "status": "started",
@@ -1964,10 +2050,7 @@ async def trigger_variant_sync(
 async def trigger_line_items_sync(
     shop_domain: str, background_tasks: BackgroundTasks
 ):
-    """
-    Manually trigger an order line items sync for a shop.
-    Useful for detailed order analysis and profitability calculations.
-    """
+    """Manually trigger an order line items sync for a shop."""
     conn = db()
     with conn, conn.cursor() as cur:
         cur.execute(
@@ -1982,10 +2065,7 @@ async def trigger_line_items_sync(
         shop_id = row["shop_id"]
         access_token = row["access_token"]
 
-    # Run sync in background
-    background_tasks.add_task(
-        sync_order_line_items, shop_domain, shop_id, access_token
-    )
+    background_tasks.add_task(sync_order_line_items, shop_domain, shop_id, access_token)
 
     return {
         "status": "started",
