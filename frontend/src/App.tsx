@@ -12,7 +12,12 @@ import {
   DataTable,
   Badge,
   Tabs,
+  Icon,
 } from '@shopify/polaris';
+import {
+  CheckCircleIcon,
+  ClockIcon,
+} from '@shopify/polaris-icons';
 import enTranslations from '@shopify/polaris/locales/en.json';
 import '@shopify/polaris/build/esm/styles.css';
 
@@ -35,7 +40,7 @@ declare global {
   }
 }
 
-// ---------- New Types for Insights / Alerts / Comparison ---------- //
+// ---------- Types for Insights / Alerts / Comparison ---------- //
 
 interface TrendDelta {
   current: number;
@@ -61,13 +66,33 @@ interface ChartComparison {
   previous_30d?: ChartComparisonWindow;
 }
 
+// ---------- Updated SyncStatus interface to match new backend ---------- //
 interface SyncStatus {
   status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'not_found';
-  orders_synced: number;
   completed_at: string | null;
   error: string | null;
-}
 
+  // Detailed stage information
+  current_stage: 'customers' | 'products' | 'orders' | 'line_items' | 'completed' | null;
+  stage_status: 'pending' | 'in_progress' | 'completed' | 'failed' | null;
+
+  // Counts for each stage
+  customers_synced: number;
+  products_synced: number;
+  orders_synced: number;
+  line_items_synced: number;
+
+  // Completion flags
+  customers_completed: boolean;
+  products_completed: boolean;
+  orders_completed: boolean;
+  line_items_completed: boolean;
+
+  // Overall progress
+  progress_percent: number;
+  stages_completed: number;
+  total_stages: number;
+}
 
 interface ChartSummary {
   current_month?: string;
@@ -76,7 +101,6 @@ interface ChartSummary {
   current_revenue?: number;
   previous_revenue?: number;
 
-  // daily orders / revenue summaries
   total_orders_30d?: number;
   total_orders_prev_30d?: number;
   delta_30d?: TrendDelta;
@@ -85,7 +109,6 @@ interface ChartSummary {
   revenue_30d?: number;
   revenue_prev_30d?: number;
 
-  // top products / customers
   total_top_revenue?: number;
   top_product?: {
     name: string;
@@ -98,11 +121,8 @@ interface ChartSummary {
     share_percent: number;
   };
 
-  // generic formatted fields for labels
   formatted?: Record<string, string | null>;
 }
-
-
 
 interface ChartData {
   key?: string;
@@ -110,7 +130,6 @@ interface ChartData {
   layout: Partial<Plotly.Layout & { title?: string | { text?: string } }>;
   export_url?: string;
 
-  // NEW: narrative + summary + alerts + comparison
   insights?: string[];
   alerts?: ChartAlert[];
   summary?: ChartSummary | null;
@@ -181,7 +200,7 @@ interface CustomerLeaderboardResponse {
 type SortDirection = 'ascending' | 'descending' | 'none';
 
 // --------------------------------------------------------------------
-// NEW: AuthGate component – checks /auth/check and redirects to /auth/start
+// AuthGate component
 // --------------------------------------------------------------------
 function AuthGate({ children }: { children: ReactNode }) {
   const [isReady, setIsReady] = useState(false);
@@ -194,7 +213,6 @@ function AuthGate({ children }: { children: ReactNode }) {
 
     if (!shop) {
       console.error('Missing ?shop= in URL – skipping auth check');
-      // Let the app render anyway so you can show an error inside
       setHasToken(true);
       setIsReady(true);
       return;
@@ -210,19 +228,16 @@ function AuthGate({ children }: { children: ReactNode }) {
           {
             method: 'GET',
             headers: { 'Content-Type': 'application/json' },
-            // credentials can be omitted; /auth/check just uses DB
           }
         );
 
         if (res.ok) {
-          // We already have an access token for this shop
           setHasToken(true);
           setIsReady(true);
           return;
         }
 
         if (res.status === 401) {
-          // No token yet → send through OAuth flow
           const authUrl =
             `${API_URL}/auth/start?shop=${encodeURIComponent(shop)}` +
             (host ? `&host=${encodeURIComponent(host)}` : '');
@@ -236,12 +251,10 @@ function AuthGate({ children }: { children: ReactNode }) {
         }
 
         console.error('Unexpected /auth/check status:', res.status);
-        // As a fallback, let the app render so you can handle it gracefully
         setHasToken(true);
         setIsReady(true);
       } catch (err) {
         console.error('Error calling /auth/check:', err);
-        // Fallback: attempt to go through OAuth anyway
         const authUrl =
           `${API_URL}/auth/start?shop=${encodeURIComponent(shop)}` +
           (host ? `&host=${encodeURIComponent(host)}` : '');
@@ -260,7 +273,6 @@ function AuthGate({ children }: { children: ReactNode }) {
   }
 
   if (!hasToken) {
-    // In practice, we redirect before this ever shows.
     return null;
   }
 
@@ -268,31 +280,77 @@ function AuthGate({ children }: { children: ReactNode }) {
 }
 
 // --------------------------------------------------------------------
-// Main AppContent – with tab navigation
+// Sync Stage Item Component
+// --------------------------------------------------------------------
+interface SyncStageItemProps {
+  label: string;
+  count: number;
+  isCompleted: boolean;
+  isActive: boolean;
+  isFailed: boolean;
+}
+
+function SyncStageItem({ label, count, isCompleted, isActive, isFailed }: SyncStageItemProps) {
+  const getStatusIcon = () => {
+    if (isCompleted) {
+      return <Icon source={CheckCircleIcon} tone="success" />;
+    }
+    if (isActive) {
+      return <Icon source={ClockIcon} tone="info" />;
+    }
+    return <Icon source={ClockIcon} tone="subdued" />;
+  };
+
+  const getStatusText = () => {
+    if (isFailed) return 'Failed';
+    if (isCompleted) return `${count.toLocaleString()} synced`;
+    if (isActive) return `${count.toLocaleString()} syncing...`;
+    return 'Waiting';
+  };
+
+  const getTextTone = (): 'subdued' | 'success' | 'critical' | undefined => {
+    if (isFailed) return 'critical';
+    if (isCompleted) return 'success';
+    if (isActive) return undefined;
+    return 'subdued';
+  };
+
+  return (
+    <InlineStack gap="200" align="start" blockAlign="center">
+      {getStatusIcon()}
+      <BlockStack gap="050">
+        <Text as="p" variant="bodyMd" fontWeight={isActive ? 'semibold' : 'regular'}>
+          {label}
+        </Text>
+        <Text as="p" variant="bodySm" tone={getTextTone()}>
+          {getStatusText()}
+        </Text>
+      </BlockStack>
+    </InlineStack>
+  );
+}
+
+// --------------------------------------------------------------------
+// Main AppContent
 // --------------------------------------------------------------------
 function AppContent() {
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [chartData, setChartData] = useState<ChartData[]>([]);
-  const [ordersSummary, setOrdersSummary] = useState<OrdersSummary | null>(
-    null
-  );
+  const [ordersSummary, setOrdersSummary] = useState<OrdersSummary | null>(null);
   const [shop, setShop] = useState<string | null>(null);
 
   const [showBanner, setShowBanner] = useState(false);
   const prevStatusRef = useRef<SyncStatus['status'] | null>(null);
 
-  // Customer leaderboard state
   const [customerData, setCustomerData] =
     useState<CustomerLeaderboardResponse | null>(null);
   const [sortedColumn, setSortedColumn] = useState<number | null>(null);
   const [sortDirection, setSortDirection] =
     useState<SortDirection>('descending');
 
-  // Tab navigation state
   const [selectedTab, setSelectedTab] = useState(0);
 
-  // NEW: comparison visibility per chart key
   const [comparisonVisibility, setComparisonVisibility] = useState<
     Record<string, boolean>
   >({});
@@ -306,9 +364,7 @@ function AppContent() {
 
   async function fetchOrdersSummary() {
     try {
-      const data = await authenticatedFetch<OrdersSummary>(
-        `/api/orders/summary`
-      );
+      const data = await authenticatedFetch<OrdersSummary>(`/api/orders/summary`);
       setOrdersSummary(data);
     } catch (e) {
       console.error('Failed to fetch orders summary:', e);
@@ -318,16 +374,10 @@ function AppContent() {
   const fetchCustomerLeaderboard = async () => {
     try {
       console.log('🔍 Fetching customer leaderboard');
-
       const data = await authenticatedFetch<CustomerLeaderboardResponse>(
         `/api/customers/leaderboard?limit=50`
       );
-
-      console.log(
-        '✅ Customer leaderboard loaded successfully:',
-        data.customers?.length || 0,
-        'customers'
-      );
+      console.log('✅ Customer leaderboard loaded:', data.customers?.length || 0, 'customers');
       setCustomerData(data);
     } catch (error) {
       console.error('💥 Failed to fetch customer leaderboard:', error);
@@ -338,34 +388,20 @@ function AppContent() {
   const fetchChartData = async () => {
     try {
       console.log('🔍 Fetching charts');
-
       const data = await authenticatedFetch<ChartsResponse>(`/api/charts`);
-
-      console.log(
-        '✅ Charts loaded successfully:',
-        data.charts?.length || 0,
-        'charts'
-      );
+      console.log('✅ Charts loaded:', data.charts?.length || 0, 'charts');
       setChartData(data.charts || []);
     } catch (error) {
       console.error('💥 Failed to fetch chart data:', error);
-      if (error instanceof Error) {
-        console.error('💥 Error name:', error.name);
-        console.error('💥 Error message:', error.message);
-        console.error('💥 Error stack:', error.stack);
-      }
-      // Set empty charts on error
       setChartData([]);
     }
   };
 
   const resolveExportUrl = (exportUrl?: string) => {
     if (!exportUrl) return null;
-
     if (exportUrl.startsWith('/charts')) return `/api${exportUrl}`;
     if (exportUrl.startsWith('/api/')) return exportUrl;
     if (exportUrl.startsWith('http')) return exportUrl;
-
     return `/api/${exportUrl.replace(/^\/+/, '')}`;
   };
 
@@ -378,7 +414,6 @@ function AppContent() {
       }
 
       console.log('Attempting to download from:', url);
-
       const blob = await authenticatedBlobFetch(url);
       console.log('Blob created, size:', blob.size, 'type:', blob.type);
 
@@ -387,14 +422,12 @@ function AppContent() {
         .slice(0, 10)}.xlsx`.replace(/\s+/g, '_');
 
       const objectUrl = window.URL.createObjectURL(blob);
-
       const a = document.createElement('a');
       a.href = objectUrl;
       a.download = filename;
       document.body.appendChild(a);
       a.click();
       a.remove();
-
       window.URL.revokeObjectURL(objectUrl);
 
       console.log('Download completed successfully');
@@ -411,10 +444,7 @@ function AppContent() {
   const downloadCustomerLeaderboard = async () => {
     try {
       const url = `/api/charts/export/top_customers`;
-      console.log(
-        'Attempting to download customer leaderboard from:',
-        url
-      );
+      console.log('Attempting to download customer leaderboard from:', url);
 
       const blob = await authenticatedBlobFetch(url);
       console.log('Blob created, size:', blob.size, 'type:', blob.type);
@@ -477,10 +507,8 @@ function AppContent() {
     let checkInterval: number | null = null;
     let timeoutId: number | null = null;
 
-    // Wait for App Bridge to be fully initialized
     const waitForAppBridge = () => {
       return new Promise<void>((resolve) => {
-        // If already initialized, resolve immediately
         if (window.shopify) {
           console.log('✅ App Bridge already ready');
           resolve();
@@ -496,7 +524,6 @@ function AppContent() {
           }
         }, 100);
 
-        // Timeout after 5 seconds
         timeoutId = window.setTimeout(() => {
           if (checkInterval) clearInterval(checkInterval);
           console.warn('⚠️ App Bridge timeout - proceeding anyway');
@@ -510,16 +537,12 @@ function AppContent() {
 
       try {
         console.log('📡 Calling sync-status endpoint');
-        console.log('📡 Shop param:', shopParam);
-        console.log('📡 API URL:', API_URL);
 
         const response = await fetch(
           `${API_URL}/auth/sync-status/${encodeURIComponent(shopParam)}`,
           {
             method: 'GET',
-            headers: {
-              'Content-Type': 'application/json',
-            },
+            headers: { 'Content-Type': 'application/json' },
           }
         );
 
@@ -551,11 +574,9 @@ function AppContent() {
 
         prevStatusRef.current = now;
 
-        // Only fetch charts/orders/customers when transitioning to completed
+        // Fetch data when sync completes
         if (data.status === 'completed' && was !== 'completed') {
-          console.log(
-            '✅ Sync completed - fetching charts, orders, and customers'
-          );
+          console.log('✅ Sync completed - fetching charts, orders, and customers');
 
           if (!isCancelled) {
             try {
@@ -573,7 +594,7 @@ function AppContent() {
 
         // Continue polling if still in progress
         if (data.status === 'pending' || data.status === 'in_progress') {
-          window.setTimeout(checkSyncStatus, 3000);
+          window.setTimeout(checkSyncStatus, 2000); // Poll every 2 seconds for better UX
         }
       } catch (error) {
         console.error('💥 Failed to fetch sync status:', error);
@@ -583,14 +604,12 @@ function AppContent() {
       }
     };
 
-    // Wait for App Bridge ONCE, then start checking sync status
     waitForAppBridge().then(() => {
       if (!isCancelled) {
         checkSyncStatus();
       }
     });
 
-    // Cleanup
     return () => {
       isCancelled = true;
       if (checkInterval) clearInterval(checkInterval);
@@ -599,7 +618,7 @@ function AppContent() {
   }, []);
 
   // --------------------------------------------------------------------
-  // Effect: optimized order-count refresh (focus-based polling)
+  // Effect: optimized order-count refresh
   // --------------------------------------------------------------------
 
   useEffect(() => {
@@ -610,7 +629,6 @@ function AppContent() {
       fetchCustomerLeaderboard();
     };
 
-    // Initial fetch
     refresh();
 
     const onFocus = () => refresh();
@@ -645,56 +663,112 @@ function AppContent() {
         return (
           <Banner tone="info">
             <BlockStack gap="200">
-              <Text as="p">
-                Your order history is being prepared for import...
-              </Text>
+              <Text as="p">Your store data is being prepared for import...</Text>
             </BlockStack>
           </Banner>
         );
 
       case 'in_progress': {
-        const progress =
-          syncStatus.orders_synced > 0
-            ? Math.min((syncStatus.orders_synced / 10000) * 100, 95)
-            : 0;
+        const progress = syncStatus.progress_percent || 0;
+        const currentStage = syncStatus.current_stage;
+
+        const stageLabels: Record<string, string> = {
+          customers: 'Customers',
+          products: 'Products',
+          orders: 'Orders',
+          line_items: 'Order Details',
+        };
+
+        const currentStageLabel = currentStage ? stageLabels[currentStage] || currentStage : '';
 
         return (
           <Banner tone="info">
-            <BlockStack gap="300">
-              <Text as="p" variant="bodyMd">
-                Importing order history...{' '}
-                {syncStatus.orders_synced.toLocaleString()} orders synced so
-                far
-              </Text>
+            <BlockStack gap="400">
+              <BlockStack gap="200">
+                <Text as="p" variant="headingMd">
+                  Importing your store data...
+                </Text>
+                <Text as="p" variant="bodySm" tone="subdued">
+                  {currentStageLabel && `Currently syncing: ${currentStageLabel}`}
+                </Text>
+              </BlockStack>
 
-              <ProgressBar progress={progress} size="small" />
+              <BlockStack gap="100">
+                <InlineStack align="space-between">
+                  <Text as="p" variant="bodySm" tone="subdued">
+                    Overall progress
+                  </Text>
+                  <Text as="p" variant="bodySm" tone="subdued">
+                    {Math.round(progress)}%
+                  </Text>
+                </InlineStack>
+                <ProgressBar progress={progress} size="small" />
+              </BlockStack>
+
+              <InlineStack gap="600" wrap>
+                <SyncStageItem
+                  label="Customers"
+                  count={syncStatus.customers_synced}
+                  isCompleted={syncStatus.customers_completed}
+                  isActive={currentStage === 'customers'}
+                  isFailed={false}
+                />
+                <SyncStageItem
+                  label="Products"
+                  count={syncStatus.products_synced}
+                  isCompleted={syncStatus.products_completed}
+                  isActive={currentStage === 'products'}
+                  isFailed={false}
+                />
+                <SyncStageItem
+                  label="Orders"
+                  count={syncStatus.orders_synced}
+                  isCompleted={syncStatus.orders_completed}
+                  isActive={currentStage === 'orders'}
+                  isFailed={false}
+                />
+                <SyncStageItem
+                  label="Order Details"
+                  count={syncStatus.line_items_synced}
+                  isCompleted={syncStatus.line_items_completed}
+                  isActive={currentStage === 'line_items'}
+                  isFailed={false}
+                />
+              </InlineStack>
 
               <Text as="p" variant="bodySm" tone="subdued">
-                This may take a few minutes depending on your store size. You
-                can use the app while this completes.
+                This may take a few minutes depending on your store size. You can use the app
+                while this completes.
               </Text>
             </BlockStack>
           </Banner>
         );
       }
 
-      case 'completed':
+      case 'completed': {
         return (
           <Banner tone="success" onDismiss={() => setShowBanner(false)}>
-            <Text as="p">
-              ✅ Successfully imported{' '}
-              {syncStatus.orders_synced.toLocaleString()} orders from your
-              store history!
-            </Text>
+            <BlockStack gap="200">
+              <Text as="p" fontWeight="semibold">
+                ✅ Successfully imported your store data!
+              </Text>
+              <Text as="p" variant="bodySm">
+                {syncStatus.customers_synced.toLocaleString()} customers •{' '}
+                {syncStatus.products_synced.toLocaleString()} products •{' '}
+                {syncStatus.orders_synced.toLocaleString()} orders •{' '}
+                {syncStatus.line_items_synced.toLocaleString()} line items
+              </Text>
+            </BlockStack>
           </Banner>
         );
+      }
 
       case 'failed':
         return (
           <Banner tone="critical" onDismiss={() => setShowBanner(false)}>
             <BlockStack gap="200">
               <Text as="p" fontWeight="semibold">
-                Failed to import order history
+                Failed to import store data
               </Text>
 
               {syncStatus.error && (
@@ -703,9 +777,15 @@ function AppContent() {
                 </Text>
               )}
 
+              {syncStatus.current_stage && (
+                <Text as="p" variant="bodySm">
+                  Failed during: {syncStatus.current_stage}
+                </Text>
+              )}
+
               <Text as="p" variant="bodySm">
-                Don't worry — new orders will still be tracked. Contact
-                support if this persists.
+                Don't worry — new orders will still be tracked. Contact support if this
+                persists.
               </Text>
             </BlockStack>
           </Banner>
@@ -721,7 +801,6 @@ function AppContent() {
 
     const { customers, summary } = customerData;
 
-    // Prepare table data with sorting
     const getSortedCustomers = () => {
       if (sortedColumn === null || sortDirection === 'none') {
         return customers;
@@ -734,27 +813,27 @@ function AppContent() {
         let bVal: number | string | null;
 
         switch (sortedColumn) {
-          case 0: // Customer Name
+          case 0:
             aVal = a.customer_name;
             bVal = b.customer_name;
             break;
-          case 1: // Orders
+          case 1:
             aVal = a.total_orders;
             bVal = b.total_orders;
             break;
-          case 2: // Revenue
+          case 2:
             aVal = a.total_revenue;
             bVal = b.total_revenue;
             break;
-          case 3: // Profit
+          case 3:
             aVal = a.total_profit ?? 0;
             bVal = b.total_profit ?? 0;
             break;
-          case 4: // AOV
+          case 4:
             aVal = a.avg_order_value;
             bVal = b.avg_order_value;
             break;
-          case 5: // Last Order
+          case 5:
             aVal = a.last_order_date || '';
             bVal = b.last_order_date || '';
             break;
@@ -886,12 +965,9 @@ function AppContent() {
                 Top {summary.total_customers} customers by revenue
               </Text>
             </div>
-            <Button onClick={downloadCustomerLeaderboard}>
-              Download Excel
-            </Button>
+            <Button onClick={downloadCustomerLeaderboard}>Download Excel</Button>
           </InlineStack>
 
-          {/* Optional leaderboard insights */}
           {summary.insights && summary.insights.length > 0 && (
             <BlockStack gap="100">
               {summary.insights.map((insight, idx) => (
@@ -907,7 +983,6 @@ function AppContent() {
             </BlockStack>
           )}
 
-          {/* Summary Cards */}
           <InlineStack gap="400" wrap={false}>
             <Card>
               <BlockStack gap="200">
@@ -945,7 +1020,6 @@ function AppContent() {
             </Card>
           </InlineStack>
 
-          {/* Data Table */}
           <DataTable
             columnContentTypes={[
               'text',
@@ -959,7 +1033,7 @@ function AppContent() {
             rows={rows}
             sortable={[true, true, true, true, true, true]}
             defaultSortDirection="descending"
-            initialSortColumnIndex={2} // Sort by revenue by default
+            initialSortColumnIndex={2}
             onSort={handleSort}
           />
         </BlockStack>
@@ -968,8 +1042,7 @@ function AppContent() {
   };
 
   const renderCharts = () => {
-    if (syncStatus?.status !== 'completed' || chartData.length === 0)
-      return null;
+    if (syncStatus?.status !== 'completed' || chartData.length === 0) return null;
 
     return (
       <Layout>
@@ -982,7 +1055,6 @@ function AppContent() {
           const chartKey = chart.key || `chart-${index}`;
           const isComparisonVisible = !!comparisonVisibility[chartKey];
 
-          // Build traces including optional comparison
           const traces: Plotly.Data[] = [...chart.data];
           const prevWindow = chart.comparison?.previous_30d;
           if (prevWindow && isComparisonVisible) {
@@ -1002,11 +1074,7 @@ function AppContent() {
               <Card>
                 <BlockStack gap="300">
                   <div style={{ padding: '16px 16px 0 16px' }}>
-                    <InlineStack
-                      align="space-between"
-                      blockAlign="center"
-                      gap="200"
-                    >
+                    <InlineStack align="space-between" blockAlign="center" gap="200">
                       <Text as="h2" variant="headingMd">
                         {titleText}
                       </Text>
@@ -1015,9 +1083,7 @@ function AppContent() {
                         {chart.comparison?.previous_30d && (
                           <Button
                             size="slim"
-                            variant={
-                              isComparisonVisible ? 'primary' : 'secondary'
-                            }
+                            variant={isComparisonVisible ? 'primary' : 'secondary'}
                             onClick={() => toggleComparison(chartKey)}
                           >
                             {isComparisonVisible
@@ -1027,10 +1093,7 @@ function AppContent() {
                         )}
 
                         {chart.export_url && (
-                          <Button
-                            size="slim"
-                            onClick={() => downloadChart(chart)}
-                          >
+                          <Button size="slim" onClick={() => downloadChart(chart)}>
                             Download
                           </Button>
                         )}
@@ -1051,7 +1114,6 @@ function AppContent() {
                     useResizeHandler
                   />
 
-                  {/* Chart-level alerts */}
                   {chart.alerts && chart.alerts.length > 0 && (
                     <div style={{ padding: '0 16px 16px 16px' }}>
                       <BlockStack gap="200">
@@ -1069,7 +1131,6 @@ function AppContent() {
                     </div>
                   )}
 
-                  {/* Chart-level insights / narratives */}
                   {chart.insights && chart.insights.length > 0 && (
                     <div style={{ padding: '0 16px 16px 16px' }}>
                       <BlockStack gap="100">
@@ -1096,123 +1157,111 @@ function AppContent() {
   };
 
   const renderOrdersOverview = () => {
-  if (!ordersSummary) return null;
+    if (!ordersSummary) return null;
 
-  const totalOrders = ordersSummary.total_orders ?? 0;
-  const formatted = ordersSummary.formatted;
-  const trend = ordersSummary.trend || {};
+    const totalOrders = ordersSummary.total_orders ?? 0;
+    const formatted = ordersSummary.formatted;
+    const trend = ordersSummary.trend || {};
 
-  const revenueDelta = trend.revenue_30d;
-  const ordersDelta = trend.orders_30d;
+    const revenueDelta = trend.revenue_30d;
+    const ordersDelta = trend.orders_30d;
 
-  const formatDeltaLabel = (delta?: TrendDelta, label?: string) => {
-    if (!delta || delta.delta_percent == null) return null;
-    const direction =
-      delta.direction === 'up'
-        ? '▲'
-        : delta.direction === 'down'
-        ? '▼'
-        : '•';
-    return `${label || ''} ${direction} ${Math.abs(
-      delta.delta_percent
-    ).toFixed(1)}% vs prior 30 days`;
-  };
+    const formatDeltaLabel = (delta?: TrendDelta, label?: string) => {
+      if (!delta || delta.delta_percent == null) return null;
+      const direction =
+        delta.direction === 'up' ? '▲' : delta.direction === 'down' ? '▼' : '•';
+      return `${label || ''} ${direction} ${Math.abs(delta.delta_percent).toFixed(
+        1
+      )}% vs prior 30 days`;
+    };
 
-  return (
-    <Card>
-      <BlockStack gap="300">
-        <Text as="h2" variant="headingMd">
-          Store overview
-        </Text>
+    return (
+      <Card>
+        <BlockStack gap="300">
+          <Text as="h2" variant="headingMd">
+            Store overview
+          </Text>
 
-        <InlineStack gap="400" wrap={false}>
-          <Card>
-            <BlockStack gap="100">
+          <InlineStack gap="400" wrap={false}>
+            <Card>
+              <BlockStack gap="100">
+                <Text as="p" variant="bodySm" tone="subdued">
+                  Total orders
+                </Text>
+                <Text as="p" variant="headingMd">
+                  {totalOrders.toLocaleString()}
+                </Text>
+              </BlockStack>
+            </Card>
+
+            <Card>
+              <BlockStack gap="100">
+                <Text as="p" variant="bodySm" tone="subdued">
+                  Total revenue (lifetime)
+                </Text>
+                <Text as="p" variant="headingMd">
+                  {formatted?.total_revenue ?? '--'}
+                </Text>
+              </BlockStack>
+            </Card>
+
+            <Card>
+              <BlockStack gap="100">
+                <Text as="p" variant="bodySm" tone="subdued">
+                  Avg order value
+                </Text>
+                <Text as="p" variant="headingMd">
+                  {formatted?.avg_order_value ?? '--'}
+                </Text>
+              </BlockStack>
+            </Card>
+          </InlineStack>
+
+          <BlockStack gap="100">
+            {revenueDelta && (
               <Text as="p" variant="bodySm" tone="subdued">
-                Total orders
+                {formatDeltaLabel(revenueDelta, 'Revenue')} ({formatted?.revenue_30d || '—'}{' '}
+                vs {formatted?.revenue_prev_30d || '—'})
               </Text>
-              <Text as="p" variant="headingMd">
-                {totalOrders.toLocaleString()}
-              </Text>
-            </BlockStack>
-          </Card>
-
-          <Card>
-            <BlockStack gap="100">
+            )}
+            {ordersDelta && (
               <Text as="p" variant="bodySm" tone="subdued">
-                Total revenue (lifetime)
+                {formatDeltaLabel(ordersDelta, 'Orders')} ({formatted?.orders_30d || '—'} vs{' '}
+                {formatted?.orders_prev_30d || '—'})
               </Text>
-              <Text as="p" variant="headingMd">
-                {formatted?.total_revenue ?? '--'}
-              </Text>
-            </BlockStack>
-          </Card>
+            )}
+          </BlockStack>
 
-          <Card>
-            <BlockStack gap="100">
-              <Text as="p" variant="bodySm" tone="subdued">
-                Avg order value
-              </Text>
-              <Text as="p" variant="headingMd">
-                {formatted?.avg_order_value ?? '--'}
-              </Text>
+          {ordersSummary.alerts && ordersSummary.alerts.length > 0 && (
+            <BlockStack gap="200">
+              {ordersSummary.alerts.map((alert, idx) => (
+                <Banner key={`orders-alert-${idx}`} tone={toneFromAlertLevel(alert.level)}>
+                  <Text as="p" variant="bodySm">
+                    {alert.message}
+                  </Text>
+                </Banner>
+              ))}
             </BlockStack>
-          </Card>
-        </InlineStack>
-
-        {/* Trend deltas text */}
-        <BlockStack gap="100">
-          {revenueDelta && (
-            <Text as="p" variant="bodySm" tone="subdued">
-              {formatDeltaLabel(revenueDelta, 'Revenue')} (
-              {formatted?.revenue_30d || '—'} vs{' '}
-              {formatted?.revenue_prev_30d || '—'})
-            </Text>
           )}
-          {ordersDelta && (
-            <Text as="p" variant="bodySm" tone="subdued">
-              {formatDeltaLabel(ordersDelta, 'Orders')} (
-              {formatted?.orders_30d || '—'} vs{' '}
-              {formatted?.orders_prev_30d || '—'})
-            </Text>
+
+          {ordersSummary.insights && ordersSummary.insights.length > 0 && (
+            <BlockStack gap="100">
+              {ordersSummary.insights.map((insight, idx) => (
+                <Text
+                  as="p"
+                  key={`orders-insight-${idx}`}
+                  variant="bodySm"
+                  tone="subdued"
+                >
+                  • {insight}
+                </Text>
+              ))}
+            </BlockStack>
           )}
         </BlockStack>
-
-        {/* Orders summary alerts / insights remain the same */}
-        {ordersSummary.alerts && ordersSummary.alerts.length > 0 && (
-          <BlockStack gap="200">
-            {ordersSummary.alerts.map((alert, idx) => (
-              <Banner
-                key={`orders-alert-${idx}`}
-                tone={toneFromAlertLevel(alert.level)}
-              >
-                <Text as="p" variant="bodySm">
-                  {alert.message}
-                </Text>
-              </Banner>
-            ))}
-          </BlockStack>
-        )}
-
-        {ordersSummary.insights && ordersSummary.insights.length > 0 && (
-          <BlockStack gap="100">
-            {ordersSummary.insights.map((insight, idx) => (
-              <Text
-                as="p"
-                key={`orders-insight-${idx}`}
-                variant="bodySm"
-                tone="subdued"
-              >
-                • {insight}
-              </Text>
-            ))}
-          </BlockStack>
-        )}
-      </BlockStack>
-    </Card>
-  );
-};
-
+      </Card>
+    );
+  };
 
   // --------------------------------------------------------------------
   // Tab content rendering
@@ -1259,41 +1308,13 @@ function AppContent() {
   // --------------------------------------------------------------------
 
   const tabs = [
-    {
-      id: 'analytics',
-      content: 'Analytics',
-      panelID: 'analytics-panel',
-    },
-    {
-      id: 'sku',
-      content: 'SKU Analytics',
-      panelID: 'sku-panel',
-    },
-    {
-      id: 'what-if',
-      content: 'What If',
-      panelID: 'what-if-panel',
-    },
-    {
-      id: 'cogs',
-      content: 'COGS & Profit',
-      panelID: 'cogs-panel',
-    },
-    {
-      id: 'forecasts',
-      content: 'Forecasts',
-      panelID: 'forecasts-panel',
-    },
-    {
-      id: 'customers',
-      content: 'Customers',
-      panelID: 'customers-panel',
-    },
-    {
-      id: 'attribution',
-      content: 'Attribution',
-      panelID: 'attribution-panel',
-    },
+    { id: 'analytics', content: 'Analytics', panelID: 'analytics-panel' },
+    { id: 'sku', content: 'SKU Analytics', panelID: 'sku-panel' },
+    { id: 'what-if', content: 'What If', panelID: 'what-if-panel' },
+    { id: 'cogs', content: 'COGS & Profit', panelID: 'cogs-panel' },
+    { id: 'forecasts', content: 'Forecasts', panelID: 'forecasts-panel' },
+    { id: 'customers', content: 'Customers', panelID: 'customers-panel' },
+    { id: 'attribution', content: 'Attribution', panelID: 'attribution-panel' },
   ];
 
   return (
@@ -1312,14 +1333,9 @@ function AppContent() {
             </BlockStack>
           </Card>
 
-          {/* Only show tabs if sync is completed */}
           {syncStatus?.status === 'completed' && (
             <div style={{ marginTop: '20px' }}>
-              <Tabs
-                tabs={tabs}
-                selected={selectedTab}
-                onSelect={handleTabChange}
-              >
+              <Tabs tabs={tabs} selected={selectedTab} onSelect={handleTabChange}>
                 <div style={{ marginTop: '20px' }}>
                   {selectedTab === 0 && renderAnalyticsTab()}
                   {selectedTab === 1 && renderSKUAnalyticsTab()}
@@ -1339,7 +1355,7 @@ function AppContent() {
 }
 
 // --------------------------------------------------------------------
-// Root App – wrapped in AuthGate
+// Root App
 // --------------------------------------------------------------------
 export default function App() {
   return (
