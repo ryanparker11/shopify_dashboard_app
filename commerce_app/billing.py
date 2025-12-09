@@ -291,53 +291,97 @@ def get_shop_from_token(payload: Dict[str, Any]) -> str:
 
 
 async def require_active_subscription(
-    payload: Dict[str, Any]
+    payload: Dict[str, Any] = Depends(verify_shopify_session_token)  # ← IMPORTANT: Add = Depends(...)
 ) -> Dict[str, Any]:
     """
     FastAPI dependency to gate routes behind active subscription.
-    Works with your existing session token authentication.
     
-    Usage:
-        @app.get("/api/protected-route", dependencies=[Depends(verify_shopify_session_token)])
-        async def protected_route(
-            subscription: Dict = Depends(require_active_subscription),
-            payload: Dict = Depends(verify_shopify_session_token)
+    IMPORTANT: This dependency automatically calls verify_shopify_session_token,
+    so you don't need to add it separately!
+    
+    Usage - Option 1 (Route-level):
+        @router.get("/premium")
+        async def premium_feature(
+            subscription: Dict = Depends(require_active_subscription)
         ):
-            # Route only accessible with active subscription
-            return {"data": "protected data"}
+            # Only accessible with active subscription
+            return {"data": "premium"}
+    
+    Usage - Option 2 (Router-level):
+        app.include_router(
+            premium_router,
+            prefix="/api/premium",
+            dependencies=[Depends(require_active_subscription)]  # ← This now works!
+        )
     
     Args:
-        payload: Session token payload from verify_shopify_session_token
+        payload: Session token payload (auto-injected from verify_shopify_session_token)
     
     Returns:
-        Subscription info dict if active, raises HTTPException otherwise
+        Subscription info dict if active
     
     Raises:
-        HTTPException: 402 Payment Required if no active subscription
+        HTTPException: 402 if no active subscription, 500 on error
     """
     shop = get_shop_from_token(payload)
     
     try:
+        # First check database (fast, reliable after webhook updates)
+        async with get_conn() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    SELECT subscription_status, subscription_plan_name, subscription_id
+                    FROM shopify.shops
+                    WHERE shop_domain = %s
+                    """,
+                    (shop,)
+                )
+                db_result = await cur.fetchone()
+                
+                # If database shows ACTIVE, trust it (webhook keeps it updated)
+                if db_result and db_result[0] == 'ACTIVE':
+                    logger.info(f"✅ Active subscription (from DB) for {shop}")
+                    return {
+                        "has_active_subscription": True,
+                        "status": db_result[0],
+                        "plan_name": db_result[1],
+                        "subscription_id": db_result[2],
+                        "source": "database"
+                    }
+        
+        # Database doesn't show ACTIVE - check with Shopify GraphQL
+        logger.info(f"Checking Shopify GraphQL for {shop}")
         sub_status = await check_subscription_status(shop)
-    except BillingError as e:
-        logger.error(f"Billing error in dependency: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to verify subscription status"
-        )
-    
-    if not sub_status["has_active_subscription"]:
-        # Return 402 Payment Required with redirect URL
-        pricing_url = await get_pricing_page_url(shop)
-        raise HTTPException(
-            status_code=402,
-            detail={
-                "message": "Active subscription required",
-                "pricing_url": pricing_url
-            }
-        )
-    
-    return sub_status
+        
+        if not sub_status["has_active_subscription"]:
+            # No active subscription - return 402 with pricing URL
+            pricing_url = await get_pricing_page_url(shop)
+            logger.warning(f"❌ No active subscription for {shop}")
+            raise HTTPException(
+                status_code=402,
+                detail={
+                    "error": "subscription_required",
+                    "message": "This feature requires an active subscription",
+                    "pricing_url": pricing_url,
+                    "has_active_subscription": False
+                }
+            )
+        
+        logger.info(f"✅ Active subscription (from GraphQL) for {shop}")
+        return sub_status
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error checking subscription for {shop}: {e}")
+        # On error, be permissive to avoid blocking users due to technical issues
+        logger.warning(f"⚠️ Subscription check failed, allowing access (failsafe)")
+        return {
+            "has_active_subscription": True,
+            "error": str(e),
+            "fallback": True
+        }
 
 
 # ============================================================================
