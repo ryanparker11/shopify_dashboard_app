@@ -7,6 +7,7 @@ import os, uvicorn, math, logging
 from fastapi import FastAPI, Request, Depends, HTTPException, Header
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
+from commerce_app.billing import require_active_subscription
 
 from commerce_app.integrations.shopify.shopify_client import get_orders, get_customers
 from commerce_app.core.routers.analytics import router as analytics_router
@@ -83,21 +84,24 @@ app.include_router(
     forecasts_router,
     prefix="/api",
     tags=["forecasts"],
-    dependencies=[Depends(verify_shopify_session_token)]
+    dependencies=[Depends(verify_shopify_session_token),
+                  Depends(require_active_subscription)]
 )
 
 app.include_router(
     attribution.router,
     prefix="/api",
     tags=["attribution"],
-    dependencies=[Depends(verify_shopify_session_token)]
+    dependencies=[Depends(verify_shopify_session_token),
+                  Depends(require_active_subscription)]
 )
 
 app.include_router(
     sku_analytics.router,
     prefix="/api",
     tags=["SKU Analytics"],
-    dependencies=[Depends(verify_shopify_session_token)]
+    dependencies=[Depends(verify_shopify_session_token),
+                  Depends(require_active_subscription)]
 )
 
 
@@ -105,14 +109,16 @@ app.include_router(
     what_if.router,
     prefix="/api",
     tags=["What If Scenarios"],
-    dependencies=[Depends(verify_shopify_session_token)]
+    dependencies=[Depends(verify_shopify_session_token),
+                  Depends(require_active_subscription)]
 )
 
 app.include_router(
     billing_router,
     prefix="/api",
     tags=["billing"],
-    dependencies=[Depends(verify_shopify_session_token)]
+    dependencies=[Depends(verify_shopify_session_token),
+                  Depends(require_active_subscription)]
 )
 
 
