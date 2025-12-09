@@ -19,6 +19,7 @@ from commerce_app.core.routers.Forecasts import router as forecasts_router
 from commerce_app.core.routers import attribution
 from commerce_app.core.routers import sku_analytics
 from commerce_app.core.routers import what_if
+from commerce_app.billing import router as billing_router
 
 # Session token verifier
 from commerce_app.auth.session_tokens import verify_shopify_session_token
@@ -107,6 +108,14 @@ app.include_router(
     dependencies=[Depends(verify_shopify_session_token)]
 )
 
+app.include_router(
+    billing_router,
+    prefix="/api",
+    tags=["billing"],
+    dependencies=[Depends(verify_shopify_session_token)]
+)
+
+
 # ❗ Do NOT protect webhooks with session tokens (they use HMAC headers)
 app.include_router(webhooks.router, prefix="/webhooks", tags=["webhooks"])
 app.include_router(gdpr_router, prefix="/webhooks", tags=["gdpr"])
@@ -135,6 +144,15 @@ def me(payload = Depends(verify_shopify_session_token)):
         "user_id": payload.get("sub")  # The Shopify user ID
     }
 
+@app.on_event("startup")
+async def startup_event():
+    """Initialize billing columns on startup"""
+    from commerce_app.billing import ensure_billing_columns
+    try:
+        await ensure_billing_columns()
+        logging.info("✅ Billing columns initialized")
+    except Exception as e:
+        logging.error(f"❌ Failed to initialize billing columns: {e}")
 # Logging routes
 for r in app.routes:
     logging.warning("ROUTE %s %s", getattr(r, "path", ""), getattr(r, "methods", ""))

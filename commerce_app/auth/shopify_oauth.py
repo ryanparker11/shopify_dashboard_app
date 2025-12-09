@@ -213,6 +213,7 @@ async def register_webhooks(shop: str, access_token: str):
         {"topic": "products/update", "address": f"{APP_URL}/webhooks/ingest"},
         {"topic": "customers/create", "address": f"{APP_URL}/webhooks/ingest"},
         {"topic": "customers/update", "address": f"{APP_URL}/webhooks/ingest"},
+        {"topic": "app_subscriptions/update", "address": f"{APP_URL}/webhooks/ingest"},
     ]
 
     async with httpx.AsyncClient(timeout=20.0) as client:
