@@ -45,6 +45,8 @@ async def process_webhook(shop_domain: str, topic: str, payload: dict, webhook_r
     """
     Process webhook payload and update relevant tables.
     This runs in the background after the webhook response is sent.
+    
+    UPDATED: Now handles billing webhooks
     """
     async with get_conn() as conn:
         async with conn.cursor() as cur:
@@ -69,6 +71,12 @@ async def process_webhook(shop_domain: str, topic: str, payload: dict, webhook_r
                     await process_product_webhook(cur, shop_id, payload)
                 elif topic == "customers/create" or topic == "customers/update":
                     await process_customer_webhook(cur, shop_id, payload)
+                
+                # ============ NEW: Handle billing webhooks ============
+                elif topic == "app_subscriptions/update":
+                    await process_billing_subscription_webhook(cur, shop_id, shop_domain, payload)
+                # ======================================================
+                
                 else:
                     print(f"⚠️  Unknown webhook topic: {topic}")
                 
@@ -467,6 +475,68 @@ async def process_customer_webhook(cur, shop_id: int, payload: dict):
     )
 
 
+# ============================================================================
+# NEW: Billing webhook handler
+# ============================================================================
+async def process_billing_subscription_webhook(cur, shop_id: int, shop_domain: str, payload: dict):
+    """
+    Process app_subscriptions/update webhook.
+    
+    This webhook fires when:
+    - Merchant approves subscription
+    - Subscription status changes (cancelled, frozen, etc.)
+    - Capped amount changes (for usage-based billing)
+    
+    Updates the subscription status in the shopify.shops table.
+    """
+    app_subscription = payload.get("app_subscription", {})
+    
+    subscription_id = str(app_subscription.get("id", ""))
+    status = app_subscription.get("status")
+    plan_name = app_subscription.get("name")
+    
+    print(f"📋 Processing subscription webhook for {shop_domain}: status={status}, plan={plan_name}")
+    
+    # Update subscription status in database
+    await cur.execute(
+        """
+        UPDATE shopify.shops
+        SET 
+            subscription_status = %s,
+            subscription_plan_name = %s,
+            subscription_id = %s,
+            subscription_updated_at = NOW()
+        WHERE shop_id = %s
+        """,
+        (status, plan_name, subscription_id, shop_id)
+    )
+    
+    # Log different subscription events for monitoring
+    if status == "ACTIVE":
+        print(f"✅ Subscription activated for {shop_domain}: {plan_name}")
+        # TODO: Send welcome email, enable full features, etc.
+    
+    elif status == "CANCELLED":
+        print(f"⚠️  Subscription cancelled for {shop_domain}")
+        # TODO: Send cancellation email, limit features, etc.
+    
+    elif status == "FROZEN":
+        print(f"❄️  Subscription frozen for {shop_domain} (payment issue)")
+        # TODO: Send payment reminder, limit access, etc.
+    
+    elif status == "DECLINED":
+        print(f"❌ Subscription declined for {shop_domain}")
+        # TODO: Follow up with merchant
+    
+    elif status == "PENDING":
+        print(f"⏳ Subscription pending approval for {shop_domain}")
+    
+    print(f"✅ Subscription status updated in database: {shop_domain} -> {status}")
+
+
+# ============================================================================
+# Webhook ingestion endpoint
+# ============================================================================
 @router.post("/ingest")
 async def webhook_ingest(
     request: Request,
@@ -483,6 +553,8 @@ async def webhook_ingest(
     3. Processes webhook in background to update relevant tables
     
     Returns 200 OK quickly to satisfy Shopify's timeout requirements.
+    
+    UPDATED: Now handles app_subscriptions/update for billing
     """
     # Get raw body for HMAC verification
     body = await request.body()
