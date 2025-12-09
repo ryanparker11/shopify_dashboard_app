@@ -84,7 +84,7 @@ app.include_router(
     forecasts_router,
     prefix="/api",
     tags=["forecasts"],
-    dependencies=[Depends(verify_shopify_session_token),
+    dependencies=[
                   Depends(require_active_subscription)]
 )
 
@@ -92,7 +92,7 @@ app.include_router(
     attribution.router,
     prefix="/api",
     tags=["attribution"],
-    dependencies=[Depends(verify_shopify_session_token),
+    dependencies=[
                   Depends(require_active_subscription)]
 )
 
@@ -100,7 +100,7 @@ app.include_router(
     sku_analytics.router,
     prefix="/api",
     tags=["SKU Analytics"],
-    dependencies=[Depends(verify_shopify_session_token),
+    dependencies=[
                   Depends(require_active_subscription)]
 )
 
@@ -109,7 +109,7 @@ app.include_router(
     what_if.router,
     prefix="/api",
     tags=["What If Scenarios"],
-    dependencies=[Depends(verify_shopify_session_token),
+    dependencies=[
                   Depends(require_active_subscription)]
 )
 
@@ -117,8 +117,7 @@ app.include_router(
     billing_router,
     prefix="/api",
     tags=["billing"],
-    dependencies=[Depends(verify_shopify_session_token),
-                  Depends(require_active_subscription)]
+    dependencies=[Depends(verify_shopify_session_token)]
 )
 
 
