@@ -30,7 +30,8 @@ api_version = "2025-10"
   "products/create",
   "products/update",
   "customers/create",
-  "customers/update"
+  "customers/update",
+  "app_subscriptions/update"
 ]
   uri = "https://api.lodestaranalytics.io/webhooks/ingest"
 

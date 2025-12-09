@@ -491,7 +491,8 @@ async def process_billing_subscription_webhook(cur, shop_id: int, shop_domain: s
     """
     app_subscription = payload.get("app_subscription", {})
     
-    subscription_id = str(app_subscription.get("id", ""))
+    # Extract subscription ID from admin_graphql_api_id (e.g., "gid://shopify/AppSubscription/35160097134")
+    subscription_id = app_subscription.get("admin_graphql_api_id") or str(app_subscription.get("id", ""))
     status = app_subscription.get("status")
     plan_name = app_subscription.get("name")
     
