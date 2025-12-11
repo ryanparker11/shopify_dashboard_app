@@ -224,7 +224,7 @@ async def get_pricing_page_url(shop: str) -> str:
     
     # This is the standard format for managed pricing URLs
     # The 'lodestar-analytics' should match your app handle in Partner Dashboard
-    return f"https://admin.shopify.com/store/{shop_name}/charges/lodestar-analytics/pricing_plans"
+    return f"https://admin.shopify.com/store/{shop_name}/charges/public_test-8/pricing_plans"
 
 
 async def update_shop_subscription_status(
