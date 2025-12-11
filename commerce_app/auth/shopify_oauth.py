@@ -281,7 +281,7 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
                 firstVisit{
                     landingPage
                     landingPageHtml
-                    referrerURL
+                    referrerSite
                     source
                     sourceType
                     sourceDescription
