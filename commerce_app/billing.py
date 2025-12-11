@@ -430,6 +430,38 @@ async def get_pricing_url(
     }
 
 
+@router.get("/subscribe-url")
+async def get_subscribe_url(
+    payload: Dict[str, Any] = Depends(verify_shopify_session_token)
+):
+    """
+    Get the subscription URL for the subscribe button on paywalled features.
+    
+    This is used by frontend components to show "Subscribe" buttons on
+    tabs/features that require an active subscription.
+    
+    Security: Shop extracted from validated session token.
+    
+    Returns:
+        {
+            "subscribe_url": "https://...",
+            "plan_name": "Lodestar Analytics Pro",
+            "price": 49.00,
+            "trial_days": 14
+        }
+    """
+    shop = get_shop_from_token(payload)
+    pricing_url = await get_pricing_page_url(shop)
+    
+    return {
+        "subscribe_url": pricing_url,
+        "plan_name": "Lodestar Analytics Pro",
+        "price": 49.00,
+        "currency": "USD",
+        "trial_days": 14
+    }
+
+
 @router.get("/redirect-to-pricing")
 async def redirect_to_pricing(
     payload: Dict[str, Any] = Depends(verify_shopify_session_token)
