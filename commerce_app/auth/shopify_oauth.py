@@ -245,19 +245,20 @@ async def register_webhooks(shop: str, access_token: str):
 
 async def initial_data_sync(shop: str, shop_id: int, access_token: str):
     """
-    Fetch ALL existing orders using Shopify Bulk Operations API (GraphQL).
-    Much faster than REST pagination - no rate limits!
-    Runs in background, updates progress in database.
+    Bulk sync orders (WITHOUT customerJourneySummary) and then,
+    for each order, fetch attribution using the REST endpoint:
+    GET /orders/<id>/customer_journey.json
     """
     print(f"🔄 Starting bulk initial sync for {shop}")
 
     from commerce_app.core.db import get_conn
     from commerce_app.core.routers.webhooks import process_order_webhook
 
-    # Mark orders sync as in progress
-    await update_sync_progress(shop_id, 'orders', 'in_progress', 0)
+    await update_sync_progress(shop_id, "orders", "in_progress", 0)
 
-    # Step 1: Start bulk operation
+    # ------------------------------------------------------------
+    # 1. BULK QUERY — *NO CUSTOMER VISIT / ATTRIBUTION FIELDS*
+    # ------------------------------------------------------------
     bulk_query = """
     {
       orders {
@@ -273,27 +274,7 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
             totalTaxSet { shopMoney { amount } }
             displayFinancialStatus
             displayFulfillmentStatus
-            customer { 
-              id 
-              email 
-            }
-            customerJourneySummary {
-                firstVisit{
-                    landingPage
-                    landingPageHtml
-                    referrerSite
-                    source
-                    sourceType
-                    sourceDescription
-                    utmParameters {
-                        campaign
-                        content
-                        medium
-                        source
-                        term
-                    }
-                }
-            }
+            customer { id email }
             lineItems {
               edges {
                 node {
@@ -316,22 +297,17 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
 
     mutation = f'''
     mutation {{
-      bulkOperationRunQuery(
-        query: "{escaped_query}"
-      ) {{
-        bulkOperation {{
-          id
-          status
-        }}
-        userErrors {{
-          field
-          message
-        }}
+      bulkOperationRunQuery(query: "{escaped_query}") {{
+        bulkOperation {{ id status }}
+        userErrors {{ field message }}
       }}
     }}
     '''
 
     async with httpx.AsyncClient(timeout=30.0) as client:
+        # ------------------------------------------------------------
+        # 2. START BULK OPERATION
+        # ------------------------------------------------------------
         try:
             response = await client.post(
                 f"https://{shop}/admin/api/2025-10/graphql.json",
@@ -341,242 +317,188 @@ async def initial_data_sync(shop: str, shop_id: int, access_token: str):
                 },
                 json={"query": mutation},
             )
-
-            if response.status_code != 200:
-                print(f"Failed to start bulk operation: {response.text}")
-                await mark_sync_failed(shop_id, "Failed to start bulk operation", "orders")
-                return 0
-
             data = response.json()
 
-            if (
-                "errors" in data
-                or data.get("data", {})
+            user_errors = (
+                data.get("data", {})
                 .get("bulkOperationRunQuery", {})
                 .get("userErrors")
-            ):
-                print(f"GraphQL errors: {data}")
-                await mark_sync_failed(shop_id, "GraphQL errors", "orders")
+            )
+
+            if user_errors:
+                print("❌ Bulk query error:", user_errors)
+                await mark_sync_failed(shop_id, str(user_errors), "orders")
                 return 0
 
-            operation_id = data["data"]["bulkOperationRunQuery"]["bulkOperation"]["id"]
+            operation_id = (
+                data["data"]["bulkOperationRunQuery"]["bulkOperation"]["id"]
+            )
             print(f"✅ Started bulk operation: {operation_id}")
 
         except Exception as e:
-            print(f"Error starting bulk operation: {e}")
             await mark_sync_failed(shop_id, str(e), "orders")
             return 0
 
-        # Step 2: Poll until complete
-        status_query = """
-        query {
-          node(id: "%s") {
-            ... on BulkOperation {
-              id
-              status
-              errorCode
-              objectCount
-              fileSize
-              url
-              partialDataUrl
-            }
-          }
-        }
-        """ % operation_id
+        # ------------------------------------------------------------
+        # 3. POLL UNTIL COMPLETE
+        # ------------------------------------------------------------
+        status_query = f"""
+        query {{
+          node(id: "{operation_id}") {{
+            ... on BulkOperation {{
+              id status errorCode objectCount url partialDataUrl
+            }}
+          }}
+        }}
+        """
 
         jsonl_url = None
-        max_wait = 600
         start_time = asyncio.get_event_loop().time()
 
         while True:
-            if asyncio.get_event_loop().time() - start_time > max_wait:
-                print(f"Bulk operation timed out after {max_wait}s")
+            if asyncio.get_event_loop().time() - start_time > 600:
                 await mark_sync_failed(shop_id, "Timeout", "orders")
                 return 0
 
-            try:
-                response = await client.post(
-                    f"https://{shop}/admin/api/2025-10/graphql.json",
-                    headers={
-                        "X-Shopify-Access-Token": access_token,
-                        "Content-Type": "application/json",
-                    },
-                    json={"query": status_query},
-                )
+            resp = await client.post(
+                f"https://{shop}/admin/api/2025-10/graphql.json",
+                headers={"X-Shopify-Access-Token": access_token},
+                json={"query": status_query},
+            )
+            op = resp.json()["data"]["node"]
 
-                if response.status_code != 200:
-                    await asyncio.sleep(2)
-                    continue
+            print(f"📊 Bulk status: {op['status']} ({op.get('objectCount')})")
 
-                data = response.json()
-                operation = data.get("data", {}).get("node", {})
-                status = operation.get("status")
+            if op["status"] == "COMPLETED":
+                jsonl_url = op["url"]
+                break
+            if op["status"] in ("FAILED", "CANCELED", "EXPIRED"):
+                jsonl_url = op["partialDataUrl"]
+                break
 
-                print(
-                    f"📊 Bulk operation status: {status} ({operation.get('objectCount', 0)} objects)"
-                )
+            await asyncio.sleep(2)
 
-                if status == "COMPLETED":
-                    jsonl_url = operation.get("url")
-                    print(
-                        f"✅ Bulk operation completed: {operation.get('objectCount')} orders"
-                    )
-                    break
-                elif status in ["FAILED", "CANCELED", "EXPIRED"]:
-                    print(
-                        f"Bulk operation failed: {status} - {operation.get('errorCode')}"
-                    )
-                    jsonl_url = operation.get("partialDataUrl")
-                    break
-
-                await asyncio.sleep(2)
-
-            except Exception as e:
-                print(f"Error polling bulk operation: {e}")
-                await asyncio.sleep(2)
-                continue
-
+        # ------------------------------------------------------------
+        # 4. DOWNLOAD JSONL
+        # ------------------------------------------------------------
         if not jsonl_url:
-            print("No data URL returned from bulk operation")
             await mark_sync_failed(shop_id, "No data URL", "orders")
             return 0
 
-        # Step 3: Download and process JSONL file
-        print(f"📥 Downloading bulk data from {jsonl_url}")
-        try:
-            response = await client.get(jsonl_url, timeout=120.0)
+        resp = await client.get(jsonl_url, timeout=120.0)
+        lines = resp.text.strip().split("\n")
 
-            if response.status_code != 200:
-                print(f"Failed to download bulk data: {response.status_code}")
-                await mark_sync_failed(shop_id, "Download failed", "orders")
-                return 0
-
-        except Exception as e:
-            print(f"Error downloading bulk data: {e}")
-            await mark_sync_failed(shop_id, str(e), "orders")
-            return 0
-
-        lines = response.text.strip().split("\n")
         total_orders = 0
-        errors = 0
 
         async with get_conn() as conn:
             async with conn.cursor() as cur:
+                # ------------------------------------------------------------
+                # 5. Process each order and fetch attribution via REST
+                # ------------------------------------------------------------
                 for line in lines:
                     if not line.strip():
                         continue
 
-                    try:
-                        item = json.loads(line)
-                        
-                        item_id = item.get("id", "")
-                        if "/Order/" not in item_id:
-                            continue
+                    item = json.loads(line)
 
-                        journey = item.get("customerJourneySummary", {})
-                        first_visit = journey.get("firstVisit", {}) if journey else {}
-                        utm_params = first_visit.get("utmParameters", {}) if first_visit else {}
-                        
-                        landing_page = first_visit.get("landingPage", "") if first_visit else None
-                        landing_site = None
-                        
-                        if landing_page and utm_params:
-                            utm_parts = []
-                            if utm_params.get("source"):
-                                utm_parts.append(f"utm_source={utm_params['source']}")
-                            if utm_params.get("medium"):
-                                utm_parts.append(f"utm_medium={utm_params['medium']}")
-                            if utm_params.get("campaign"):
-                                utm_parts.append(f"utm_campaign={utm_params['campaign']}")
-                            if utm_params.get("content"):
-                                utm_parts.append(f"utm_content={utm_params['content']}")
-                            if utm_params.get("term"):
-                                utm_parts.append(f"utm_term={utm_params['term']}")
-                            
-                            if utm_parts:
-                                separator = "?" if "?" not in landing_page else "&"
-                                landing_site = f"{landing_page}{separator}{'&'.join(utm_parts)}"
-                            else:
-                                landing_site = landing_page
-                        elif landing_page:
-                            landing_site = landing_page
-                        
-                        rest_format_order = {
-                            "id": item.get("id", "").split("/")[-1],
-                            "name": item.get("name"),
-                            "order_number": item.get("name", "").replace("#", ""),
-                            "email": item.get("email"),
-                            "total_price": item.get("totalPriceSet", {})
-                            .get("shopMoney", {})
-                            .get("amount", "0"),
-                            "subtotal_price": item.get("subtotalPriceSet", {})
-                            .get("shopMoney", {})
-                            .get("amount", "0"),
-                            "total_tax": item.get("totalTaxSet", {})
-                            .get("shopMoney", {})
-                            .get("amount", "0"),
-                            "currency": item.get("totalPriceSet", {})
-                            .get("shopMoney", {})
-                            .get("currencyCode", "USD"),
-                            "financial_status": item.get("displayFinancialStatus"),
-                            "fulfillment_status": item.get("displayFulfillmentStatus"),
-                            "created_at": item.get("createdAt"),
-                            "updated_at": item.get("updatedAt"),
-                            "customer": {
-                                "id": item.get("customer", {})
-                                .get("id", "")
-                                .split("/")[-1]
-                                if item.get("customer")
-                                else None
-                            },
-                            "line_items": item.get("lineItems", {}).get("edges", []),
-                        }
-
-                        await process_order_webhook(cur, shop_id, rest_format_order)
-                        total_orders += 1
-
-                        if total_orders % 100 == 0:
-                            await conn.commit()
-                            print(f"📦 Processed {total_orders} orders...")
-                            await update_sync_progress(shop_id, 'orders', 'in_progress', total_orders)
-
-                    except Exception as e:
-                        print(f"Error processing order line: {e}")
-                        errors += 1
+                    if "/Order/" not in item.get("id", ""):
                         continue
 
+                    order_id = item["id"].split("/")[-1]
+
+                    # -----------------------------
+                    # REST Attribution Fetch
+                    # -----------------------------
+                    try:
+                        attrib_resp = await client.get(
+                            f"https://{shop}/admin/api/2025-10/orders/{order_id}/customer_journey.json",
+                            headers={"X-Shopify-Access-Token": access_token},
+                        )
+
+                        attrib_data = (
+                            attrib_resp.json().get("customer_journey", {}) 
+                            if attrib_resp.status_code == 200 else {}
+                        )
+
+                        first = attrib_data.get("first_visit", {})
+                        utm = first.get("utm_parameters", {})
+
+                        landing_page = first.get("landing_page")
+                        landing_site = None
+
+                        if landing_page:
+                            params = []
+                            if utm.get("source"):
+                                params.append(f"utm_source={utm['source']}")
+                            if utm.get("medium"):
+                                params.append(f"utm_medium={utm['medium']}")
+                            if utm.get("campaign"):
+                                params.append(f"utm_campaign={utm['campaign']}")
+                            if utm.get("content"):
+                                params.append(f"utm_content={utm['content']}")
+                            if utm.get("term"):
+                                params.append(f"utm_term={utm['term']}")
+
+                            if params:
+                                sep = "?" if "?" not in landing_page else "&"
+                                landing_site = landing_page + sep + "&".join(params)
+                            else:
+                                landing_site = landing_page
+
+                    except Exception:
+                        landing_site = None
+
+                    # -----------------------------
+                    # Construct simplified order
+                    # -----------------------------
+                    rest_format_order = {
+                        "id": order_id,
+                        "name": item.get("name"),
+                        "order_number": item.get("name", "").replace("#", ""),
+                        "email": item.get("email"),
+                        "total_price": item.get("totalPriceSet", {})
+                        .get("shopMoney", {})
+                        .get("amount", "0"),
+                        "subtotal_price": item.get("subtotalPriceSet", {})
+                        .get("shopMoney", {})
+                        .get("amount", "0"),
+                        "total_tax": item.get("totalTaxSet", {})
+                        .get("shopMoney", {})
+                        .get("amount", "0"),
+                        "currency": item.get("totalPriceSet", {})
+                        .get("shopMoney", {})
+                        .get("currencyCode", "USD"),
+                        "financial_status": item.get("displayFinancialStatus"),
+                        "fulfillment_status": item.get("displayFulfillmentStatus"),
+                        "created_at": item.get("createdAt"),
+                        "updated_at": item.get("updatedAt"),
+                        "customer": {
+                            "id": item.get("customer", {}).get("id", "").split("/")[-1]
+                            if item.get("customer")
+                            else None
+                        },
+                        "line_items": item.get("lineItems", {}).get("edges", []),
+                        "attribution_landing_site": landing_site,  # NEW
+                    }
+
+                    await process_order_webhook(cur, shop_id, rest_format_order)
+                    total_orders += 1
+
+                    if total_orders % 100 == 0:
+                        await conn.commit()
+                        await update_sync_progress(
+                            shop_id, "orders", "in_progress", total_orders
+                        )
+
                 await conn.commit()
 
-                # Update customer total_spent based on actual orders
-                print(f"📊 Calculating customer total_spent from orders...")
-                await cur.execute(
-                    """
-                    UPDATE shopify.customers c
-                    SET total_spent = COALESCE(order_totals.total, 0)
-                    FROM (
-                        SELECT 
-                            customer_id,
-                            SUM(total_price) as total
-                        FROM shopify.orders
-                        WHERE shop_id = %s
-                          AND customer_id IS NOT NULL
-                          AND financial_status IN ('paid', 'authorized', 'partially_paid')
-                        GROUP BY customer_id
-                    ) AS order_totals
-                    WHERE c.shop_id = %s
-                      AND c.customer_id = order_totals.customer_id
-                    """,
-                    (shop_id, shop_id)
-                )
-                updated_count = cur.rowcount
-                await conn.commit()
-                print(f"✅ Updated total_spent for {updated_count} customers based on orders")
-
-        # Mark orders stage as complete
-        await mark_sync_stage_complete(shop_id, 'orders', total_orders)
-        print(f"✅ Bulk sync complete for {shop}: {total_orders} orders imported ({errors} errors)")
-        
+        # ------------------------------------------------------------
+        # 6. Mark stage complete
+        # ------------------------------------------------------------
+        await mark_sync_stage_complete(shop_id, "orders", total_orders)
+        print(f"✅ Orders synced: {total_orders}")
         return total_orders
+
 
 
 async def sync_products(shop: str, shop_id: int, access_token: str):
