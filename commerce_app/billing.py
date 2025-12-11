@@ -271,23 +271,35 @@ async def update_shop_subscription_status(
 
 def get_shop_from_token(payload: Dict[str, Any]) -> str:
     """
-    Extract shop domain from validated session token payload.
-    Same pattern as your analytics.py
-    
-    The 'dest' claim contains the shop URL like: https://store.myshopify.com
+    Extract the real *.myshopify.com domain from the Shopify session token.
+    Handles BOTH:
+      - https://store.myshopify.com
+      - https://admin.shopify.com/store/<store-name>
     """
     dest = payload.get("dest", "")
     if not dest:
         raise HTTPException(401, "Missing shop in token")
+
+    # Normalize
+    dest = dest.replace("https://", "").replace("http://", "")
     
-    # Remove https:// prefix
-    shop_domain = dest.replace("https://", "").replace("http://", "")
-    
-    # Validate format
-    if not shop_domain.endswith(".myshopify.com"):
-        raise HTTPException(401, "Invalid shop domain in token")
-    
-    return shop_domain
+    # Case 1: New Shopify admin domain (admin.shopify.com/store/<shop>)
+    if dest.startswith("admin.shopify.com"):
+        # Example: admin.shopify.com/store/test-auth-1-2
+        parts = dest.split("/")
+        try:
+            store_name = parts[2]  # "test-auth-1-2"
+        except IndexError:
+            raise HTTPException(401, "Invalid admin.shopify.com dest format")
+
+        return f"{store_name}.myshopify.com"
+
+    # Case 2: Classic myshopify.com domain
+    if dest.endswith(".myshopify.com"):
+        return dest
+
+    raise HTTPException(401, f"Invalid shop domain in token: {dest}")
+
 
 
 async def require_active_subscription(
