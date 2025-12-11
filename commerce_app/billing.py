@@ -142,12 +142,22 @@ async def check_subscription_status(
     if not access_token:
         access_token = await get_shop_access_token(shop)
         if not access_token:
-            raise BillingError(f"No access token found for shop: {shop}")
+            logger.error(f"❌ No access token found for shop: {shop}")
+            # Return default state instead of failing
+            return {
+                "has_active_subscription": False,
+                "subscriptions": [],
+                "is_trial": False,
+                "trial_ends": None,
+                "error": "No access token found - shop may need to reinstall app"
+            }
     
     headers = {
         "Content-Type": "application/json",
         "X-Shopify-Access-Token": access_token
     }
+    
+    logger.info(f"🔑 Using access token for {shop}: {access_token[:20]}...")
     
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
@@ -157,15 +167,41 @@ async def check_subscription_status(
                 headers=headers
             )
             
+            logger.info(f"📡 GraphQL response status: {response.status_code}")
+            
+            if response.status_code == 401:
+                logger.error(f"❌ Invalid access token for {shop} - token may be expired or revoked")
+                # Return default state instead of failing
+                return {
+                    "has_active_subscription": False,
+                    "subscriptions": [],
+                    "is_trial": False,
+                    "trial_ends": None,
+                    "error": "Access token invalid - please reinstall the app"
+                }
+            
             if response.status_code != 200:
                 logger.error(f"GraphQL error: {response.status_code} - {response.text}")
-                raise BillingError(f"Failed to check subscription: {response.status_code}")
+                # Return default state instead of raising error
+                return {
+                    "has_active_subscription": False,
+                    "subscriptions": [],
+                    "is_trial": False,
+                    "trial_ends": None,
+                    "error": f"GraphQL error: {response.status_code}"
+                }
             
             data = response.json()
             
             if "errors" in data:
                 logger.error(f"GraphQL errors: {data['errors']}")
-                raise BillingError(f"GraphQL errors: {data['errors']}")
+                return {
+                    "has_active_subscription": False,
+                    "subscriptions": [],
+                    "is_trial": False,
+                    "trial_ends": None,
+                    "error": f"GraphQL errors: {data['errors']}"
+                }
             
             subscriptions = (
                 data.get("data", {})
@@ -203,10 +239,22 @@ async def check_subscription_status(
     
     except httpx.HTTPError as e:
         logger.error(f"HTTP error checking subscription: {e}")
-        raise BillingError(f"Network error: {e}")
+        return {
+            "has_active_subscription": False,
+            "subscriptions": [],
+            "is_trial": False,
+            "trial_ends": None,
+            "error": f"Network error: {e}"
+        }
     except Exception as e:
         logger.error(f"Unexpected error in check_subscription_status: {e}", exc_info=True)
-        raise BillingError(f"Unexpected error: {e}")
+        return {
+            "has_active_subscription": False,
+            "subscriptions": [],
+            "is_trial": False,
+            "trial_ends": None,
+            "error": f"Unexpected error: {e}"
+        }
 
 
 async def get_pricing_page_url(shop: str) -> str:
@@ -272,9 +320,15 @@ async def update_shop_subscription_status(
 def get_shop_from_token(payload: Dict[str, Any]) -> str:
     """
     Extract shop domain from validated session token payload.
-    Same pattern as your analytics.py
+    Same pattern as your Forecasts.py
     
     The 'dest' claim contains the shop URL like: https://store.myshopify.com
+    
+    Args:
+        payload: The validated session token payload dict
+    
+    Returns:
+        Shop domain (e.g., "store.myshopify.com")
     """
     dest = payload.get("dest", "")
     if not dest:
@@ -350,24 +404,47 @@ async def require_active_subscription(
         
         # Database doesn't show ACTIVE - check with Shopify GraphQL
         logger.info(f"Checking Shopify GraphQL for {shop}")
-        sub_status = await check_subscription_status(shop)
         
-        if not sub_status["has_active_subscription"]:
-            # No active subscription - return 402 with pricing URL
-            pricing_url = await get_pricing_page_url(shop)
-            logger.warning(f"❌ No active subscription for {shop}")
-            raise HTTPException(
-                status_code=402,
-                detail={
-                    "error": "subscription_required",
-                    "message": "This feature requires an active subscription",
-                    "pricing_url": pricing_url,
-                    "has_active_subscription": False
+        try:
+            sub_status = await check_subscription_status(shop)
+            
+            # If GraphQL check returned an error (like invalid token), be permissive
+            if "error" in sub_status:
+                logger.warning(f"⚠️ GraphQL check failed: {sub_status['error']}")
+                logger.warning(f"⚠️ Allowing access (failsafe mode)")
+                return {
+                    "has_active_subscription": False,
+                    "error": sub_status["error"],
+                    "fallback": True
                 }
-            )
+            
+            if not sub_status["has_active_subscription"]:
+                # No active subscription - return 402 with pricing URL
+                pricing_url = await get_pricing_page_url(shop)
+                logger.warning(f"❌ No active subscription for {shop}")
+                raise HTTPException(
+                    status_code=402,
+                    detail={
+                        "error": "subscription_required",
+                        "message": "This feature requires an active subscription",
+                        "pricing_url": pricing_url,
+                        "has_active_subscription": False
+                    }
+                )
+            
+            logger.info(f"✅ Active subscription (from GraphQL) for {shop}")
+            return sub_status
         
-        logger.info(f"✅ Active subscription (from GraphQL) for {shop}")
-        return sub_status
+        except HTTPException:
+            raise
+        except Exception as graphql_error:
+            logger.error(f"⚠️ GraphQL check failed: {graphql_error}")
+            logger.warning(f"⚠️ Allowing access (failsafe mode)")
+            return {
+                "has_active_subscription": False,
+                "error": str(graphql_error),
+                "fallback": True
+            }
         
     except HTTPException:
         raise
@@ -404,16 +481,56 @@ async def billing_status(
         }
     """
     try:
-        shop = get_shop_from_token(payload)
-        logger.info(f"🔍 Checking billing status for: {shop}")
+        logger.info(f"🔍 billing_status called, payload: {payload}")
         
+        shop = get_shop_from_token(payload)
+        logger.info(f"🏪 Extracted shop: {shop}")
+        
+        # First, just check if shop exists in database
+        try:
+            async with get_conn() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute(
+                        "SELECT shop_id, shop_domain FROM shopify.shops WHERE shop_domain = %s",
+                        (shop,)
+                    )
+                    shop_check = await cur.fetchone()
+                    logger.info(f"🗃️  Shop lookup result: {shop_check}")
+                    
+                    if not shop_check:
+                        logger.error(f"❌ Shop not found in database: {shop}")
+                        return {
+                            "has_active_subscription": False,
+                            "error": f"Shop not found: {shop}",
+                            "subscriptions": [],
+                            "is_trial": False,
+                            "trial_ends": None
+                        }
+        except Exception as db_error:
+            logger.error(f"💥 Database connection error: {db_error}", exc_info=True)
+            return {
+                "has_active_subscription": False,
+                "error": f"Database error: {str(db_error)}",
+                "subscriptions": [],
+                "is_trial": False,
+                "trial_ends": None
+            }
+        
+        # Now check subscription
         status = await check_subscription_status(shop)
         logger.info(f"✅ Billing status result: {status}")
         
         return status
+        
     except BillingError as e:
-        logger.error(f"💥 BillingError: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"💥 BillingError: {e}", exc_info=True)
+        return {
+            "has_active_subscription": False,
+            "error": f"BillingError: {str(e)}",
+            "subscriptions": [],
+            "is_trial": False,
+            "trial_ends": None
+        }
     except Exception as e:
         logger.error(f"💥 Unexpected error in billing_status: {e}", exc_info=True)
         # Return a safe default to avoid blocking users
