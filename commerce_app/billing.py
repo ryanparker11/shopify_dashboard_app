@@ -312,9 +312,13 @@ async def require_active_subscription(
         # First check database (fast, reliable after webhook updates)
         async with get_conn() as conn:
             async with conn.cursor() as cur:
+                # Be explicit about column order and what we're checking
                 await cur.execute(
                     """
-                    SELECT subscription_status, subscription_plan_name, subscription_id
+                    SELECT 
+                        subscription_status,
+                        subscription_plan_name,
+                        subscription_id
                     FROM shopify.shops
                     WHERE shop_domain = %s
                     """,
@@ -325,15 +329,24 @@ async def require_active_subscription(
             logger.info(f"📊 Database result: {db_result}")
             
             # If database shows ACTIVE, trust it (webhook keeps it updated)
-            if db_result and db_result[0] == 'ACTIVE':
-                logger.info(f"✅ Active subscription (from DB) for {shop}")
-                return {
-                    "has_active_subscription": True,
-                    "status": db_result[0],
-                    "plan_name": db_result[1],
-                    "subscription_id": db_result[2],
-                    "source": "database"
-                }
+            if db_result:
+                status = db_result[0]
+                plan_name = db_result[1]
+                subscription_id = db_result[2]
+                
+                logger.info(f"📊 Parsed - Status: {status}, Plan: {plan_name}, ID: {subscription_id}")
+                
+                if status == 'ACTIVE':
+                    logger.info(f"✅ Active subscription (from DB) for {shop}")
+                    return {
+                        "has_active_subscription": True,
+                        "status": status,
+                        "plan_name": plan_name,
+                        "subscription_id": subscription_id,
+                        "source": "database"
+                    }
+                else:
+                    logger.warning(f"⚠️ Shop {shop} has status: {status} (not ACTIVE)")
         
         # Database doesn't show ACTIVE - check with Shopify GraphQL
         logger.info(f"Checking Shopify GraphQL for {shop}")
@@ -666,8 +679,7 @@ async def ensure_billing_columns():
                     END IF;
                 END $$;
             """)
-            await conn.commit()
-            logger.info("✅ Billing columns ensured in shops table")
+        logger.info("✅ Billing columns ensured in shops table")
 
 
 # ============================================================================
