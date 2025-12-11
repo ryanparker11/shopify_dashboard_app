@@ -110,13 +110,12 @@ async def get_shop_access_token(shop_domain: str) -> Optional[str]:
         Access token string or None if not found
     """
     async with get_conn() as conn:
-        async with conn.cursor() as cur:
-            await cur.execute(
-                "SELECT access_token FROM shopify.shops WHERE shop_domain = %s",
-                (shop_domain,)
-            )
-            row = await cur.fetchone()
-            return row[0] if row else None
+        # asyncpg uses fetchrow directly
+        row = await conn.fetchrow(
+            "SELECT access_token FROM shopify.shops WHERE shop_domain = $1",
+            shop_domain
+        )
+        return row['access_token'] if row else None
 
 
 async def check_subscription_status(
@@ -204,6 +203,9 @@ async def check_subscription_status(
     except httpx.HTTPError as e:
         logger.error(f"HTTP error checking subscription: {e}")
         raise BillingError(f"Network error: {e}")
+    except Exception as e:
+        logger.error(f"Unexpected error in check_subscription_status: {e}", exc_info=True)
+        raise BillingError(f"Unexpected error: {e}")
 
 
 async def get_pricing_page_url(shop: str) -> str:
@@ -243,26 +245,23 @@ async def update_shop_subscription_status(
         subscription_id: Shopify subscription ID
     """
     async with get_conn() as conn:
-        async with conn.cursor() as cur:
-            # First ensure the subscription_status column exists
-            # (Add this column to your schema if it doesn't exist)
-            await cur.execute(
-                """
-                UPDATE shopify.shops
-                SET 
-                    subscription_status = %s,
-                    subscription_plan_name = %s,
-                    subscription_id = %s,
-                    subscription_updated_at = NOW()
-                WHERE shop_domain = %s
-                """,
-                (status, plan_name, subscription_id, shop_domain)
-            )
-            await conn.commit()
-            logger.info(
-                f"Updated subscription for {shop_domain}: "
-                f"status={status}, plan={plan_name}"
-            )
+        # asyncpg uses execute directly
+        await conn.execute(
+            """
+            UPDATE shopify.shops
+            SET 
+                subscription_status = $1,
+                subscription_plan_name = $2,
+                subscription_id = $3,
+                subscription_updated_at = NOW()
+            WHERE shop_domain = $4
+            """,
+            status, plan_name, subscription_id, shop_domain
+        )
+        logger.info(
+            f"Updated subscription for {shop_domain}: "
+            f"status={status}, plan={plan_name}"
+        )
 
 
 # ============================================================================
@@ -291,28 +290,10 @@ def get_shop_from_token(payload: Dict[str, Any]) -> str:
 
 
 async def require_active_subscription(
-    payload: Dict[str, Any] = Depends(verify_shopify_session_token)  # ← IMPORTANT: Add = Depends(...)
+    payload: Dict[str, Any] = Depends(verify_shopify_session_token)
 ) -> Dict[str, Any]:
     """
     FastAPI dependency to gate routes behind active subscription.
-    
-    IMPORTANT: This dependency automatically calls verify_shopify_session_token,
-    so you don't need to add it separately!
-    
-    Usage - Option 1 (Route-level):
-        @router.get("/premium")
-        async def premium_feature(
-            subscription: Dict = Depends(require_active_subscription)
-        ):
-            # Only accessible with active subscription
-            return {"data": "premium"}
-    
-    Usage - Option 2 (Router-level):
-        app.include_router(
-            premium_router,
-            prefix="/api/premium",
-            dependencies=[Depends(require_active_subscription)]  # ← This now works!
-        )
     
     Args:
         payload: Session token payload (auto-injected from verify_shopify_session_token)
@@ -324,31 +305,33 @@ async def require_active_subscription(
         HTTPException: 402 if no active subscription, 500 on error
     """
     shop = get_shop_from_token(payload)
+    logger.info(f"🔍 Checking subscription for: {shop}")
     
     try:
         # First check database (fast, reliable after webhook updates)
         async with get_conn() as conn:
-            async with conn.cursor() as cur:
-                await cur.execute(
-                    """
-                    SELECT subscription_status, subscription_plan_name, subscription_id
-                    FROM shopify.shops
-                    WHERE shop_domain = %s
-                    """,
-                    (shop,)
-                )
-                db_result = await cur.fetchone()
-                
-                # If database shows ACTIVE, trust it (webhook keeps it updated)
-                if db_result and db_result[0] == 'ACTIVE':
-                    logger.info(f"✅ Active subscription (from DB) for {shop}")
-                    return {
-                        "has_active_subscription": True,
-                        "status": db_result[0],
-                        "plan_name": db_result[1],
-                        "subscription_id": db_result[2],
-                        "source": "database"
-                    }
+            # asyncpg uses fetchrow directly, not cursor()
+            db_result = await conn.fetchrow(
+                """
+                SELECT subscription_status, subscription_plan_name, subscription_id
+                FROM shopify.shops
+                WHERE shop_domain = $1
+                """,
+                shop
+            )
+            
+            logger.info(f"📊 Database result: {db_result}")
+            
+            # If database shows ACTIVE, trust it (webhook keeps it updated)
+            if db_result and db_result['subscription_status'] == 'ACTIVE':
+                logger.info(f"✅ Active subscription (from DB) for {shop}")
+                return {
+                    "has_active_subscription": True,
+                    "status": db_result['subscription_status'],
+                    "plan_name": db_result['subscription_plan_name'],
+                    "subscription_id": db_result['subscription_id'],
+                    "source": "database"
+                }
         
         # Database doesn't show ACTIVE - check with Shopify GraphQL
         logger.info(f"Checking Shopify GraphQL for {shop}")
@@ -374,7 +357,7 @@ async def require_active_subscription(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error checking subscription for {shop}: {e}")
+        logger.error(f"Error checking subscription for {shop}: {e}", exc_info=True)
         # On error, be permissive to avoid blocking users due to technical issues
         logger.warning(f"⚠️ Subscription check failed, allowing access (failsafe)")
         return {
@@ -405,11 +388,27 @@ async def billing_status(
             "trial_ends": str or null
         }
     """
-    shop = get_shop_from_token(payload)
     try:
-        return await check_subscription_status(shop)
+        shop = get_shop_from_token(payload)
+        logger.info(f"🔍 Checking billing status for: {shop}")
+        
+        status = await check_subscription_status(shop)
+        logger.info(f"✅ Billing status result: {status}")
+        
+        return status
     except BillingError as e:
+        logger.error(f"💥 BillingError: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        logger.error(f"💥 Unexpected error in billing_status: {e}", exc_info=True)
+        # Return a safe default to avoid blocking users
+        return {
+            "has_active_subscription": False,
+            "subscriptions": [],
+            "is_trial": False,
+            "trial_ends": None,
+            "error": str(e)
+        }
 
 
 @router.get("/pricing-url")
