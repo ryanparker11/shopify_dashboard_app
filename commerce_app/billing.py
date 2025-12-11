@@ -105,6 +105,38 @@ async def check_subscription_status(shop: str) -> Dict[str, Any]:
     #     "fallback": True
     # }
 
+# ============================================================================
+# Database Migration Helper (kept for backward compatibility)
+# ============================================================================
+
+async def ensure_billing_columns():
+    """
+    Retained for backward compatibility.
+    Ensures billing columns exist in the shops table.
+    Safe to call every startup.
+    """
+    async with get_conn() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("""
+                DO $$ 
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_schema = 'shopify' 
+                        AND table_name = 'shops' 
+                        AND column_name = 'subscription_status'
+                    ) THEN
+                        ALTER TABLE shopify.shops
+                        ADD COLUMN subscription_status VARCHAR(50),
+                        ADD COLUMN subscription_plan_name VARCHAR(255),
+                        ADD COLUMN subscription_id VARCHAR(255),
+                        ADD COLUMN subscription_updated_at TIMESTAMP;
+                    END IF;
+                END $$;
+            """)
+            await conn.commit()
+
+    logger.info("Billing columns ensured in DB.")
 
 # ============================================================================
 # Pricing Page
