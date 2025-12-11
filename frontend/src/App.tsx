@@ -28,7 +28,6 @@ import { ForecastsPage } from './components/ForecastsPage';
 import { AttributionPage } from './components/AttributionPage';
 import { SKUAnalyticsPage } from './components/SkuAnalyticsPage';
 import { WhatIfScenariosPage } from './components/WhatIfScenariosPage';
-import { SubscriptionGate } from './components/SubscriptionGate';
 import { useEffect, useRef, useState, useCallback } from 'react';
 import type { ReactNode } from 'react';
 import Plot from 'react-plotly.js';
@@ -198,12 +197,6 @@ interface CustomerLeaderboardResponse {
   };
 }
 
-interface BillingStatus {
-  has_active_subscription: boolean;
-  is_trial?: boolean;
-  trial_ends?: string;
-}
-
 type SortDirection = 'ascending' | 'descending' | 'none';
 
 // --------------------------------------------------------------------
@@ -362,35 +355,12 @@ function AppContent() {
     Record<string, boolean>
   >({});
 
-  // Billing state
-  const [hasActiveSubscription, setHasActiveSubscription] = useState(false);
-
   const API_URL =
     import.meta.env.VITE_API_URL || 'https://api.lodestaranalytics.io';
 
   // --------------------------------------------------------------------
   // Helpers
   // --------------------------------------------------------------------
-
-  const checkBillingStatus = async () => {
-    try {
-      console.log('🔍 Checking billing status');
-      
-      const data = await authenticatedFetch<BillingStatus>('/api/billing/status');
-      
-      console.log('✅ Billing status:', data);
-      setHasActiveSubscription(data.has_active_subscription);
-      
-      // Optional: Show trial info in console
-      if (data.is_trial && data.trial_ends) {
-        console.log(`📅 Trial ends: ${data.trial_ends}`);
-      }
-    } catch (error) {
-      console.error('💥 Failed to check billing status:', error);
-      // Default to false on error
-      setHasActiveSubscription(false);
-    }
-  };
 
   async function fetchOrdersSummary() {
     try {
@@ -519,24 +489,6 @@ function AppContent() {
   };
 
   // --------------------------------------------------------------------
-  // Effect: Check if user just subscribed
-  // --------------------------------------------------------------------
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const subscriptionParam = params.get('subscription');
-    
-    if (subscriptionParam === 'active') {
-      console.log('✅ User just subscribed, refreshing billing status');
-      checkBillingStatus();
-      
-      // Remove the query param from URL
-      const newUrl = window.location.pathname + 
-        window.location.search.replace(/[?&]subscription=active/, '');
-      window.history.replaceState({}, '', newUrl);
-    }
-  }, []);
-
-  // --------------------------------------------------------------------
   // Effect: initial sync-status polling + initial data fetches
   // --------------------------------------------------------------------
 
@@ -550,9 +502,6 @@ function AppContent() {
     }
 
     setShop(shopParam);
-
-    // Check billing status when app loads
-    checkBillingStatus();
 
     let isCancelled = false;
     let checkInterval: number | null = null;
@@ -1282,6 +1231,34 @@ function AppContent() {
               </Text>
             )}
           </BlockStack>
+{/*
+          {ordersSummary.alerts && ordersSummary.alerts.length > 0 && (
+            <BlockStack gap="200">
+              {ordersSummary.alerts.map((alert, idx) => (
+                <Banner key={`orders-alert-${idx}`} tone={toneFromAlertLevel(alert.level)}>
+                  <Text as="p" variant="bodySm">
+                    {alert.message}
+                  </Text>
+                </Banner>
+              ))}
+            </BlockStack>
+          )}
+*/}
+
+          {/*ordersSummary.insights && ordersSummary.insights.length > 0 && (
+            <BlockStack gap="100">
+              {ordersSummary.insights.map((insight, idx) => (
+                <Text
+                  as="p"
+                  key={`orders-insight-${idx}`}
+                  variant="bodySm"
+                  tone="subdued"
+                >
+                  • {insight}
+                </Text>
+              ))}
+            </BlockStack>
+          )*/}
         </BlockStack>
       </Card>
     );
@@ -1307,14 +1284,7 @@ function AppContent() {
 
   const renderForecastsTab = () => {
     if (!shop) return null;
-    return (
-      <SubscriptionGate
-        hasActiveSubscription={hasActiveSubscription}
-        feature="Revenue and order forecasting"
-      >
-        <ForecastsPage />
-      </SubscriptionGate>
-    );
+    return <ForecastsPage />;
   };
 
   const renderCustomersTab = () => {
@@ -1323,36 +1293,15 @@ function AppContent() {
 
   const renderAttributionTab = () => {
     if (!shop) return null;
-    return (
-      <SubscriptionGate
-        hasActiveSubscription={hasActiveSubscription}
-        feature="Marketing attribution analysis"
-      >
-        <AttributionPage shopDomain={shop} />
-      </SubscriptionGate>
-    );
+    return <AttributionPage shopDomain={shop} />;
   };
 
   const renderSKUAnalyticsTab = () => {
-    return (
-      <SubscriptionGate
-        hasActiveSubscription={hasActiveSubscription}
-        feature="SKU-level profitability analysis"
-      >
-        <SKUAnalyticsPage />
-      </SubscriptionGate>
-    );
+    return <SKUAnalyticsPage />;
   };
 
   const renderWhatIfTab = () => {
-    return (
-      <SubscriptionGate
-        hasActiveSubscription={hasActiveSubscription}
-        feature="What-If scenario modeling"
-      >
-        <WhatIfScenariosPage />
-      </SubscriptionGate>
-    );
+    return <WhatIfScenariosPage />;
   };
 
   // --------------------------------------------------------------------
