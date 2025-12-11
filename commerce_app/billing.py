@@ -110,12 +110,13 @@ async def get_shop_access_token(shop_domain: str) -> Optional[str]:
         Access token string or None if not found
     """
     async with get_conn() as conn:
-        # asyncpg uses fetchrow directly
-        row = await conn.fetchrow(
-            "SELECT access_token FROM shopify.shops WHERE shop_domain = $1",
-            shop_domain
-        )
-        return row['access_token'] if row else None
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "SELECT access_token FROM shopify.shops WHERE shop_domain = %s",
+                (shop_domain,)
+            )
+            row = await cur.fetchone()
+            return row[0] if row else None
 
 
 async def check_subscription_status(
@@ -245,19 +246,19 @@ async def update_shop_subscription_status(
         subscription_id: Shopify subscription ID
     """
     async with get_conn() as conn:
-        # asyncpg uses execute directly
-        await conn.execute(
-            """
-            UPDATE shopify.shops
-            SET 
-                subscription_status = $1,
-                subscription_plan_name = $2,
-                subscription_id = $3,
-                subscription_updated_at = NOW()
-            WHERE shop_domain = $4
-            """,
-            status, plan_name, subscription_id, shop_domain
-        )
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                UPDATE shopify.shops
+                SET 
+                    subscription_status = %s,
+                    subscription_plan_name = %s,
+                    subscription_id = %s,
+                    subscription_updated_at = NOW()
+                WHERE shop_domain = %s
+                """,
+                (status, plan_name, subscription_id, shop_domain)
+            )
         logger.info(
             f"Updated subscription for {shop_domain}: "
             f"status={status}, plan={plan_name}"
@@ -310,26 +311,27 @@ async def require_active_subscription(
     try:
         # First check database (fast, reliable after webhook updates)
         async with get_conn() as conn:
-            # asyncpg uses fetchrow directly, not cursor()
-            db_result = await conn.fetchrow(
-                """
-                SELECT subscription_status, subscription_plan_name, subscription_id
-                FROM shopify.shops
-                WHERE shop_domain = $1
-                """,
-                shop
-            )
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    SELECT subscription_status, subscription_plan_name, subscription_id
+                    FROM shopify.shops
+                    WHERE shop_domain = %s
+                    """,
+                    (shop,)
+                )
+                db_result = await cur.fetchone()
             
             logger.info(f"📊 Database result: {db_result}")
             
             # If database shows ACTIVE, trust it (webhook keeps it updated)
-            if db_result and db_result['subscription_status'] == 'ACTIVE':
+            if db_result and db_result[0] == 'ACTIVE':
                 logger.info(f"✅ Active subscription (from DB) for {shop}")
                 return {
                     "has_active_subscription": True,
-                    "status": db_result['subscription_status'],
-                    "plan_name": db_result['subscription_plan_name'],
-                    "subscription_id": db_result['subscription_id'],
+                    "status": db_result[0],
+                    "plan_name": db_result[1],
+                    "subscription_id": db_result[2],
                     "source": "database"
                 }
         
