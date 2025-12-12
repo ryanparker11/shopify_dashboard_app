@@ -357,13 +357,13 @@ function AppContent() {
     Record<string, boolean>
   >({});
 
-  const [subscriptionStatus, setSubscriptionStatus] = useState<string | null>(null);
+  const [subscriptionStatus, setSubscriptionStatus] = useState<"LOADING" |"ACTIVE" | "NONE">("LOADING");
 
   const API_URL =
     import.meta.env.VITE_API_URL || 'https://api.lodestaranalytics.io';
 
   const isSubscriptionActive =
-    !subscriptionStatus || subscriptionStatus === 'ACTIVE';
+    subscriptionStatus === 'ACTIVE';
 
   // --------------------------------------------------------------------
   // Helpers
@@ -413,11 +413,17 @@ function AppContent() {
       const data = await authenticatedFetch<{ subscription_status: string }>(
         '/api/billing/subscription-status'
       );
-      setSubscriptionStatus(data.subscription_status);
+      const raw = data.subscription_status;
+      if (raw === "ACTIVE") {
+        setSubscriptionStatus("ACTIVE");
+      } else {
+      // ANYTHING not ACTIVE → treated as locked
+        setSubscriptionStatus("NONE");
+      };
     } catch (error) {
       console.error('💥 Failed to fetch subscription status:', error);
       // Fail-open: leave subscriptionStatus = null so features stay usable
-      setSubscriptionStatus(null);
+      setSubscriptionStatus("NONE");
     }
   };
 
