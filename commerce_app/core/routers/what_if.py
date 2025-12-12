@@ -192,7 +192,7 @@ async def get_baseline_metrics(
                     AND oli.variant_id = pv.variant_id
                 WHERE o.shop_id = %s
                   AND o.order_date >= CURRENT_DATE - %s
-                  AND o.financial_status IN ('paid', 'PAID','partially_paid')
+                  AND o.financial_status IN ('paid', 'PAID','partially_paid','PARTIALLY_PAID')
                 GROUP BY o.order_date
                 ORDER BY o.order_date DESC
                 """,
@@ -329,7 +329,7 @@ async def run_monte_carlo_simulation(
                     AND oli.variant_id = pv.variant_id
                 WHERE o.shop_id = %s
                   AND o.order_date >= CURRENT_DATE - %s
-                  AND o.financial_status IN ('paid', 'PAID','partially_paid')
+                  AND o.financial_status IN ('paid', 'PAID','partially_paid','PARTIALLY_PAID')
                 GROUP BY o.order_date
                 ORDER BY o.order_date DESC
                 """,
@@ -561,7 +561,7 @@ async def preview_price_elasticity(
                         AND oli.variant_id = pv.variant_id
                     WHERE o.shop_id = %s
                       AND o.order_date >= CURRENT_DATE - 30
-                      AND o.financial_status IN ('paid', 'PAID','partially_paid')
+                      AND o.financial_status IN ('paid', 'PAID','partially_paid','PARTIALLY_PAID')
                     GROUP BY o.order_date
                 ) daily_stats
                 """,

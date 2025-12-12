@@ -14,10 +14,7 @@ import {
   Tabs,
   Icon,
 } from '@shopify/polaris';
-import {
-  CheckCircleIcon,
-  ClockIcon,
-} from '@shopify/polaris-icons';
+import { CheckCircleIcon, ClockIcon } from '@shopify/polaris-icons';
 import enTranslations from '@shopify/polaris/locales/en.json';
 import '@shopify/polaris/build/esm/styles.css';
 
@@ -218,8 +215,7 @@ function AuthGate({ children }: { children: ReactNode }) {
       return;
     }
 
-    const API_URL =
-      import.meta.env.VITE_API_URL || 'https://api.lodestaranalytics.io';
+    const API_URL = import.meta.env.VITE_API_URL || 'https://api.lodestaranalytics.io';
 
     (async () => {
       try {
@@ -290,7 +286,13 @@ interface SyncStageItemProps {
   isFailed: boolean;
 }
 
-function SyncStageItem({ label, count, isCompleted, isActive, isFailed }: SyncStageItemProps) {
+function SyncStageItem({
+  label,
+  count,
+  isCompleted,
+  isActive,
+  isFailed,
+}: SyncStageItemProps) {
   const getStatusIcon = () => {
     if (isCompleted) {
       return <Icon source={CheckCircleIcon} tone="success" />;
@@ -355,8 +357,13 @@ function AppContent() {
     Record<string, boolean>
   >({});
 
+  const [subscriptionStatus, setSubscriptionStatus] = useState<string | null>(null);
+
   const API_URL =
     import.meta.env.VITE_API_URL || 'https://api.lodestaranalytics.io';
+
+  const isSubscriptionActive =
+    !subscriptionStatus || subscriptionStatus === 'ACTIVE';
 
   // --------------------------------------------------------------------
   // Helpers
@@ -364,7 +371,7 @@ function AppContent() {
 
   async function fetchOrdersSummary() {
     try {
-      const data = await authenticatedFetch<OrdersSummary>(`/api/orders/summary`);
+      const data = await authenticatedFetch<OrdersSummary>('/api/orders/summary');
       setOrdersSummary(data);
     } catch (e) {
       console.error('Failed to fetch orders summary:', e);
@@ -375,9 +382,13 @@ function AppContent() {
     try {
       console.log('🔍 Fetching customer leaderboard');
       const data = await authenticatedFetch<CustomerLeaderboardResponse>(
-        `/api/customers/leaderboard?limit=50`
+        '/api/customers/leaderboard?limit=50'
       );
-      console.log('✅ Customer leaderboard loaded:', data.customers?.length || 0, 'customers');
+      console.log(
+        '✅ Customer leaderboard loaded:',
+        data.customers?.length || 0,
+        'customers'
+      );
       setCustomerData(data);
     } catch (error) {
       console.error('💥 Failed to fetch customer leaderboard:', error);
@@ -388,12 +399,48 @@ function AppContent() {
   const fetchChartData = async () => {
     try {
       console.log('🔍 Fetching charts');
-      const data = await authenticatedFetch<ChartsResponse>(`/api/charts`);
+      const data = await authenticatedFetch<ChartsResponse>('/api/charts');
       console.log('✅ Charts loaded:', data.charts?.length || 0, 'charts');
       setChartData(data.charts || []);
     } catch (error) {
       console.error('💥 Failed to fetch chart data:', error);
       setChartData([]);
+    }
+  };
+
+  const fetchSubscriptionStatus = async () => {
+    try {
+      const data = await authenticatedFetch<{ subscription_status: string }>(
+        '/api/billing/subscription-status'
+      );
+      setSubscriptionStatus(data.subscription_status);
+    } catch (error) {
+      console.error('💥 Failed to fetch subscription status:', error);
+      // Fail-open: leave subscriptionStatus = null so features stay usable
+      setSubscriptionStatus(null);
+    }
+  };
+
+  const handleUpgradeClick = async () => {
+    try {
+      const data = await authenticatedFetch<{ pricing_url: string }>(
+        '/api/billing/pricing-url'
+      );
+      const url = data.pricing_url;
+      if (!url) {
+        throw new Error('Missing pricing_url in response');
+      }
+
+      if (window.top) {
+        window.top.location.href = url;
+      } else {
+        window.location.href = url;
+      }
+    } catch (error) {
+      console.error('💥 Failed to get pricing URL:', error);
+      alert(
+        'Unable to open the subscription page right now. Please try again, or contact support if this continues.'
+      );
     }
   };
 
@@ -417,7 +464,7 @@ function AppContent() {
       const blob = await authenticatedBlobFetch(url);
       console.log('Blob created, size:', blob.size, 'type:', blob.type);
 
-      const filename = `${chart.key || 'chart'}_${new Date()
+      const filename = `${(chart.key || 'chart')}_${new Date()
         .toISOString()
         .slice(0, 10)}.xlsx`.replace(/\s+/g, '_');
 
@@ -443,7 +490,7 @@ function AppContent() {
 
   const downloadCustomerLeaderboard = async () => {
     try {
-      const url = `/api/charts/export/top_customers`;
+      const url = '/api/charts/export/top_customers';
       console.log('Attempting to download customer leaderboard from:', url);
 
       const blob = await authenticatedBlobFetch(url);
@@ -487,6 +534,29 @@ function AppContent() {
     if (level === 'positive') return 'success';
     return 'info';
   };
+
+  const renderSubscriptionBanner = () => (
+    <Banner tone="warning">
+      <BlockStack gap="300">
+        <Text as="p" variant="bodyMd" fontWeight="semibold">
+          Subscribe to unlock SKU Analytics, What If, Forecasts, and Attribution
+        </Text>
+        <Text as="p" variant="bodySm">
+          Upgrade your Lodestar plan to access advanced SKU-level analytics, scenario
+          planning, predictive forecasts, and marketing attribution.
+        </Text>
+        <Button variant="primary" onClick={handleUpgradeClick}>
+          View subscription options
+        </Button>
+      </BlockStack>
+    </Banner>
+  );
+
+  const renderPaywalledTabContent = () => (
+    <BlockStack gap="400">
+      {renderSubscriptionBanner()}
+    </BlockStack>
+  );
 
   // --------------------------------------------------------------------
   // Effect: initial sync-status polling + initial data fetches
@@ -584,6 +654,7 @@ function AppContent() {
                 fetchChartData(),
                 fetchOrdersSummary(),
                 fetchCustomerLeaderboard(),
+                fetchSubscriptionStatus(),
               ]);
               console.log('✅ All data fetched successfully');
             } catch (error) {
@@ -604,6 +675,11 @@ function AppContent() {
       }
     };
 
+    // Fetch subscription status early (even before sync completes)
+    fetchSubscriptionStatus().catch((err) =>
+      console.error('Failed initial subscription status fetch:', err)
+    );
+
     waitForAppBridge().then(() => {
       if (!isCancelled) {
         checkSyncStatus();
@@ -615,7 +691,7 @@ function AppContent() {
       if (checkInterval) clearInterval(checkInterval);
       if (timeoutId) clearTimeout(timeoutId);
     };
-  }, []);
+  }, [API_URL]);
 
   // --------------------------------------------------------------------
   // Effect: optimized order-count refresh
@@ -679,7 +755,9 @@ function AppContent() {
           line_items: 'Order Details',
         };
 
-        const currentStageLabel = currentStage ? stageLabels[currentStage] || currentStage : '';
+        const currentStageLabel = currentStage
+          ? stageLabels[currentStage] || currentStage
+          : '';
 
         return (
           <Banner tone="info">
@@ -1220,45 +1298,19 @@ function AppContent() {
           <BlockStack gap="100">
             {revenueDelta && (
               <Text as="p" variant="bodySm" tone="subdued">
-                {formatDeltaLabel(revenueDelta, 'Revenue')} ({formatted?.revenue_30d || '—'}{' '}
-                vs {formatted?.revenue_prev_30d || '—'})
+                {formatDeltaLabel(revenueDelta, 'Revenue')} (
+                {formatted?.revenue_30d || '—'} vs{' '}
+                {formatted?.revenue_prev_30d || '—'})
               </Text>
             )}
             {ordersDelta && (
               <Text as="p" variant="bodySm" tone="subdued">
-                {formatDeltaLabel(ordersDelta, 'Orders')} ({formatted?.orders_30d || '—'} vs{' '}
+                {formatDeltaLabel(ordersDelta, 'Orders')} (
+                {formatted?.orders_30d || '—'} vs{' '}
                 {formatted?.orders_prev_30d || '—'})
               </Text>
             )}
           </BlockStack>
-{/*
-          {ordersSummary.alerts && ordersSummary.alerts.length > 0 && (
-            <BlockStack gap="200">
-              {ordersSummary.alerts.map((alert, idx) => (
-                <Banner key={`orders-alert-${idx}`} tone={toneFromAlertLevel(alert.level)}>
-                  <Text as="p" variant="bodySm">
-                    {alert.message}
-                  </Text>
-                </Banner>
-              ))}
-            </BlockStack>
-          )}
-*/}
-
-          {/*ordersSummary.insights && ordersSummary.insights.length > 0 && (
-            <BlockStack gap="100">
-              {ordersSummary.insights.map((insight, idx) => (
-                <Text
-                  as="p"
-                  key={`orders-insight-${idx}`}
-                  variant="bodySm"
-                  tone="subdued"
-                >
-                  • {insight}
-                </Text>
-              ))}
-            </BlockStack>
-          )*/}
         </BlockStack>
       </Card>
     );
@@ -1284,6 +1336,9 @@ function AppContent() {
 
   const renderForecastsTab = () => {
     if (!shop) return null;
+    if (!isSubscriptionActive) {
+      return renderPaywalledTabContent();
+    }
     return <ForecastsPage />;
   };
 
@@ -1293,14 +1348,23 @@ function AppContent() {
 
   const renderAttributionTab = () => {
     if (!shop) return null;
+    if (!isSubscriptionActive) {
+      return renderPaywalledTabContent();
+    }
     return <AttributionPage shopDomain={shop} />;
   };
 
   const renderSKUAnalyticsTab = () => {
+    if (!isSubscriptionActive) {
+      return renderPaywalledTabContent();
+    }
     return <SKUAnalyticsPage />;
   };
 
   const renderWhatIfTab = () => {
+    if (!isSubscriptionActive) {
+      return renderPaywalledTabContent();
+    }
     return <WhatIfScenariosPage />;
   };
 
@@ -1333,6 +1397,11 @@ function AppContent() {
               </InlineStack>
             </BlockStack>
           </Card>
+
+          {/* Global subscription banner directly under header */}
+          {subscriptionStatus && subscriptionStatus !== 'ACTIVE' && (
+            <div style={{ marginTop: '20px' }}>{renderSubscriptionBanner()}</div>
+          )}
 
           {syncStatus?.status === 'completed' && (
             <div style={{ marginTop: '20px' }}>
