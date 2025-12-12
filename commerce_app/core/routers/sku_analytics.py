@@ -87,7 +87,7 @@ async def sku_overview(
                     AND oli.variant_id = pv.variant_id
                 WHERE oli.shop_id = %s
                   AND o.order_date >= CURRENT_DATE - %s
-                  AND o.financial_status IN ('paid', 'PAID', 'partially_paid')
+                  AND o.financial_status IN ('paid', 'PAID', 'partially_paid','PARTIALLY_PAID')
                 ORDER BY o.order_date DESC
                 """,
                 (shop_id, days)
@@ -264,7 +264,7 @@ async def sku_trend(
                 LEFT JOIN shopify.products p ON oli.shop_id = p.shop_id AND oli.product_id = p.product_id
                 WHERE oli.shop_id = %s
                   AND o.order_date >= CURRENT_DATE - %s
-                  AND o.financial_status IN ('paid', 'PAID', 'partially_paid')
+                  AND o.financial_status IN ('paid', 'PAID', 'partially_paid','PARTIALLY_PAID')
                 GROUP BY sku_key, oli.product_id, oli.variant_id, pv.sku
                 ORDER BY total_revenue DESC
                 LIMIT %s
@@ -308,7 +308,7 @@ async def sku_trend(
                 LEFT JOIN shopify.products p ON oli.shop_id = p.shop_id AND oli.product_id = p.product_id
                 WHERE oli.shop_id = %s
                   AND o.order_date >= CURRENT_DATE - %s
-                  AND o.financial_status IN ('paid', 'PAID', 'partially_paid')
+                  AND o.financial_status IN ('paid', 'PAID', 'partially_paid','PARTIALLY_PAID')
                 GROUP BY period, oli.product_id, oli.variant_id, pv.sku
                 ORDER BY period ASC
                 """,
@@ -445,7 +445,7 @@ async def sku_profit_leaders(
                 LEFT JOIN shopify.products p ON oli.shop_id = p.shop_id AND oli.product_id = p.product_id
                 WHERE oli.shop_id = %s
                   AND o.order_date >= CURRENT_DATE - %s
-                  AND o.financial_status IN ('paid', 'PAID', 'partially_paid')
+                  AND o.financial_status IN ('paid', 'PAID', 'partially_paid','PARTIALLY_PAID')
                 GROUP BY oli.product_id, oli.variant_id, pv.sku
                 HAVING SUM(oli.quantity * oli.price) > 0
                 """,
@@ -561,7 +561,7 @@ async def export_sku_analytics(
                     AND oli.variant_id = pv.variant_id
                 WHERE oli.shop_id = %s
                   AND o.order_date >= CURRENT_DATE - %s
-                  AND o.financial_status IN ('paid', 'PAID','partially_paid')
+                  AND o.financial_status IN ('paid', 'PAID','partially_paid','PARTIALLY_PAID')
                 ORDER BY o.order_date DESC
                 """,
                 (shop_id, days)

@@ -15,7 +15,7 @@ import base64
 import hmac
 import hashlib
 import logging
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
 from enum import Enum
 
 from fastapi import APIRouter, Depends, HTTPException, Header, Request, BackgroundTasks
@@ -30,6 +30,7 @@ except ImportError:
     from core.db import get_conn
     from auth.session_tokens import verify_shopify_session_token
 
+
 load_dotenv()
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,9 @@ SHOPIFY_API_SECRET = os.environ.get("SHOPIFY_API_SECRET")
 APP_URL = os.environ.get("APP_URL", "").rstrip("/")
 
 
+# --------------------------------------------------------------------------
+# ENUM — Subscription States
+# --------------------------------------------------------------------------
 class SubscriptionStatus(str, Enum):
     ACTIVE = "ACTIVE"
     PENDING = "PENDING"
@@ -52,17 +56,15 @@ class BillingError(Exception):
     pass
 
 
-# ============================================================================
-# **UPDATED**: DB-ONLY Billing Check (Legacy compatible)
-# ============================================================================
-
+# --------------------------------------------------------------------------
+# DB-ONLY Subscription Check
+# --------------------------------------------------------------------------
 async def check_subscription_status(shop: str) -> Dict[str, Any]:
     """
-    NEW VERSION:
-    - No GraphQL calls
-    - Returns subscription info purely from database
-    - Backward compatible with old return format
+    Pure database billing lookup.
+    Returns a backward-compatible response format.
     """
+
     async with get_conn() as conn:
         async with conn.cursor() as cur:
             await cur.execute(
@@ -81,7 +83,6 @@ async def check_subscription_status(shop: str) -> Dict[str, Any]:
         raise BillingError(f"Shop not found in DB: {shop}")
 
     status, plan_name, subscription_id = row
-
     is_active = status == "ACTIVE"
 
     return {
@@ -93,28 +94,15 @@ async def check_subscription_status(shop: str) -> Dict[str, Any]:
                 "status": status,
             }
         ] if is_active else [],
-        "is_trial": False,        # Trials handled by Shopify managed pricing
+        "is_trial": False,
         "trial_ends": None
     }
 
-    # OPTIONAL FAILSAFE (COMMENTED OUT):
-    # If you want to allow access during outages:
-    #
-    # return {
-    #     "has_active_subscription": True,
-    #     "fallback": True
-    # }
 
-# ============================================================================
-# Database Migration Helper (kept for backward compatibility)
-# ============================================================================
-
+# --------------------------------------------------------------------------
+# Database Migration Helper
+# --------------------------------------------------------------------------
 async def ensure_billing_columns():
-    """
-    Retained for backward compatibility.
-    Ensures billing columns exist in the shops table.
-    Safe to call every startup.
-    """
     async with get_conn() as conn:
         async with conn.cursor() as cur:
             await cur.execute("""
@@ -138,19 +126,18 @@ async def ensure_billing_columns():
 
     logger.info("Billing columns ensured in DB.")
 
-# ============================================================================
-# Pricing Page
-# ============================================================================
 
+# --------------------------------------------------------------------------
+# Shopify Pricing URL
+# --------------------------------------------------------------------------
 async def get_pricing_page_url(shop: str) -> str:
     shop_name = shop.replace(".myshopify.com", "")
     return f"https://admin.shopify.com/store/{shop_name}/charges/public_test-8/pricing_plans"
 
 
-# ============================================================================
+# --------------------------------------------------------------------------
 # DB Update from Webhook
-# ============================================================================
-
+# --------------------------------------------------------------------------
 async def update_shop_subscription_status(
     shop_domain: str,
     status: str,
@@ -174,15 +161,13 @@ async def update_shop_subscription_status(
             await conn.commit()
 
     logger.info(
-        f"Updated subscription for {shop_domain}: "
-        f"{status} ({plan_name})"
+        f"Updated subscription for {shop_domain}: {status} ({plan_name})"
     )
 
 
-# ============================================================================
-# Extract Shop Domain From Session Token
-# ============================================================================
-
+# --------------------------------------------------------------------------
+# Extract Shop from Session Token
+# --------------------------------------------------------------------------
 def get_shop_from_token(payload: Dict[str, Any]) -> str:
     dest = payload.get("dest", "")
     if not dest:
@@ -190,14 +175,12 @@ def get_shop_from_token(payload: Dict[str, Any]) -> str:
 
     dest = dest.replace("https://", "").replace("http://", "")
 
-    # New admin domain handler
+    # Handle admin.shopify.com embedded URLs
     if dest.startswith("admin.shopify.com"):
         parts = dest.split("/")
-        try:
-            store_name = parts[2]
-        except IndexError:
+        if len(parts) < 3:
             raise HTTPException(401, "Invalid admin.shopify.com dest format")
-
+        store_name = parts[2]
         return f"{store_name}.myshopify.com"
 
     if dest.endswith(".myshopify.com"):
@@ -206,10 +189,9 @@ def get_shop_from_token(payload: Dict[str, Any]) -> str:
     raise HTTPException(401, f"Invalid shop domain in token: {dest}")
 
 
-# ============================================================================
-# Subscription Gate Dependency
-# ============================================================================
-
+# --------------------------------------------------------------------------
+# Subscription-Gated Dependency
+# --------------------------------------------------------------------------
 async def require_active_subscription(
     payload: Dict[str, Any] = Depends(verify_shopify_session_token)
 ) -> Dict[str, Any]:
@@ -236,56 +218,59 @@ async def require_active_subscription(
 
     except Exception as e:
         logger.error(f"Subscription check failed for {shop}: {e}")
-
-        # FAILSAFE — COMMENTED OUT (re-enable if desired)
-        #
-        # return {
-        #     "has_active_subscription": True,
-        #     "fallback": True,
-        #     "error": str(e)
-        # }
-        #
-
         raise HTTPException(500, "Subscription check failed")
 
 
-# ============================================================================
-# Routes
-# ============================================================================
+# --------------------------------------------------------------------------
+# ROUTES
+# --------------------------------------------------------------------------
 
 @router.get("/status")
-async def billing_status(
-    payload: Dict[str, Any] = Depends(verify_shopify_session_token)
-):
+async def billing_status(payload: Dict[str, Any] = Depends(verify_shopify_session_token)):
     shop = get_shop_from_token(payload)
     return await check_subscription_status(shop)
 
 
+# ⭐ NEW ENDPOINT — returns only subscription_status (for frontend banner)
+@router.get("/subscription-status")
+async def subscription_status(payload: Dict[str, Any] = Depends(verify_shopify_session_token)):
+    shop = get_shop_from_token(payload)
+
+    async with get_conn() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                SELECT subscription_status
+                FROM shopify.shops
+                WHERE shop_domain = %s
+                """,
+                (shop,)
+            )
+            row = await cur.fetchone()
+
+    if not row:
+        raise HTTPException(404, "Shop not found")
+
+    return {"subscription_status": row[0]}
+
+
 @router.get("/pricing-url")
-async def get_pricing_url(
-    payload: Dict[str, Any] = Depends(verify_shopify_session_token)
-):
+async def get_pricing_url(payload: Dict[str, Any] = Depends(verify_shopify_session_token)):
     shop = get_shop_from_token(payload)
     return {"pricing_url": await get_pricing_page_url(shop)}
 
 
 @router.get("/redirect-to-pricing")
-async def redirect_to_pricing(
-    payload: Dict[str, Any] = Depends(verify_shopify_session_token)
-):
+async def redirect_to_pricing(payload: Dict[str, Any] = Depends(verify_shopify_session_token)):
     shop = get_shop_from_token(payload)
     return RedirectResponse(url=await get_pricing_page_url(shop))
 
 
-# ============================================================================
-# Callback After Subscription Approval
-# ============================================================================
-
+# --------------------------------------------------------------------------
+# Callback
+# --------------------------------------------------------------------------
 @router.get("/callback")
-async def billing_callback(
-    shop: str,
-    charge_id: Optional[str] = None
-):
+async def billing_callback(shop: str, charge_id: Optional[str] = None):
     try:
         status = await check_subscription_status(shop)
 
@@ -297,9 +282,7 @@ async def billing_callback(
                 plan_name=sub["name"],
                 subscription_id=sub["id"]
             )
-            return RedirectResponse(
-                f"https://app.lodestaranalytics.io?shop={shop}&subscription=active"
-            )
+            return RedirectResponse(f"https://app.lodestaranalytics.io?shop={shop}&subscription=active")
 
         return RedirectResponse(
             f"https://app.lodestaranalytics.io?shop={shop}&subscription=declined"
@@ -310,10 +293,9 @@ async def billing_callback(
         raise HTTPException(500, "Billing callback failed")
 
 
-# ============================================================================
-# Webhook for Subscription Updates
-# ============================================================================
-
+# --------------------------------------------------------------------------
+# Webhook Processing
+# --------------------------------------------------------------------------
 def verify_billing_webhook(body: bytes, hmac_header: str, secret: str) -> bool:
     computed = base64.b64encode(
         hmac.new(secret.encode(), body, hashlib.sha256).digest()
@@ -364,3 +346,4 @@ async def handle_subscription_update_webhook(
     )
 
     return {"status": "ok"}
+

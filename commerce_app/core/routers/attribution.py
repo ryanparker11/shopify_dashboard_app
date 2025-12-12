@@ -260,7 +260,7 @@ async def attribution_overview(
                 FROM shopify.orders o
                 WHERE o.shop_id = %s
                   AND o.created_at >= NOW() - make_interval(days => %s)
-                  AND o.financial_status IN ('paid', 'PAID','partially_paid')
+                  AND o.financial_status IN ('paid', 'PAID','partially_paid','PARTIALLY_PAID')
                 ORDER BY o.created_at DESC
                 """,
                 (shop_id, days)
@@ -369,7 +369,7 @@ async def attribution_campaigns(
                 FROM shopify.orders o
                 WHERE o.shop_id = %s
                   AND o.created_at >= NOW() - make_interval(days => %s)
-                  AND o.financial_status IN ('paid', 'PAID','partially_paid')
+                  AND o.financial_status IN ('paid', 'PAID','partially_paid','PARTIALLY_PAID')
                 ORDER BY o.created_at DESC
                 """,
                 (shop_id, days)
@@ -473,7 +473,7 @@ async def attribution_trend(
                 FROM shopify.orders o
                 WHERE o.shop_id = %s
                   AND o.created_at >= NOW() - make_interval(days => %s)
-                  AND o.financial_status IN ('paid', 'PAID','partially_paid')
+                  AND o.financial_status IN ('paid', 'PAID','partially_paid','PARTIALLY_PAID')
                 """,
                 (shop_id, days)
             )
@@ -513,7 +513,7 @@ async def attribution_trend(
                 LEFT JOIN shopify.orders o 
                     ON DATE_TRUNC(%s, o.created_at)::date = ds.period
                     AND o.shop_id = %s
-                    AND o.financial_status IN ('paid', 'PAID','partially_paid')
+                    AND o.financial_status IN ('paid', 'PAID','partially_paid','PARTIALLY_PAID')
                 GROUP BY ds.period, landing_site, source_name, referring_site
                 ORDER BY ds.period ASC
                 """,
@@ -660,7 +660,7 @@ async def attribution_customer_split(
                 FROM shopify.orders o
                 WHERE o.shop_id = %s
                   AND o.created_at >= NOW() - make_interval(days => %s)
-                  AND o.financial_status IN ('paid', 'PAID','partially_paid')
+                  AND o.financial_status IN ('paid', 'PAID','partially_paid','PARTIALLY_PAID')
                 """,
                 (shop_id, days)
             )
@@ -779,7 +779,7 @@ async def export_attribution_overview(
                 FROM shopify.orders o
                 WHERE o.shop_id = %s
                   AND o.created_at >= NOW() - make_interval(days => %s)
-                  AND o.financial_status IN ('paid', 'PAID','partially_paid')
+                  AND o.financial_status IN ('paid', 'PAID','partially_paid','PARTIALLY_PAID')
                 ORDER BY o.created_at DESC
                 """,
                 (shop_id, days)
@@ -893,7 +893,7 @@ async def export_attribution_campaigns(
                 FROM shopify.orders o
                 WHERE o.shop_id = %s
                   AND o.created_at >= NOW() - make_interval(days => %s)
-                  AND o.financial_status IN ('paid', 'PAID','partially_paid')
+                  AND o.financial_status IN ('paid', 'PAID','partially_paid','PARTIALLY_PAID')
                 ORDER BY o.created_at DESC
                 """,
                 (shop_id, days)
@@ -1014,7 +1014,7 @@ async def export_attribution_trend(
                 LEFT JOIN shopify.orders o 
                     ON DATE_TRUNC(%s, o.created_at)::date = ds.period
                     AND o.shop_id = %s
-                    AND o.financial_status IN ('paid', 'PAID','partially_paid')
+                    AND o.financial_status IN ('paid', 'PAID','partially_paid','PARTIALLY_PAID')
                 GROUP BY ds.period, landing_site, source_name, referring_site
                 ORDER BY ds.period ASC
                 """,
@@ -1157,7 +1157,7 @@ async def export_attribution_customer_split(
                 FROM shopify.orders o
                 WHERE o.shop_id = %s
                   AND o.created_at >= NOW() - make_interval(days => %s)
-                  AND o.financial_status IN ('paid', 'PAID','partially_paid')
+                  AND o.financial_status IN ('paid', 'PAID','partially_paid','PARTIALLY_PAID')
                 """,
                 (shop_id, days)
             )
